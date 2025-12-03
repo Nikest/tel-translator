@@ -49,8 +49,7 @@ wss.on('connection', (connection) => {
                     type: 'server_vad',
                     threshold: 0.4,           // чуть чувствительнее (было 0.5)
                     prefix_padding_ms: 150,   // меньше буфера перед речью (было 300)
-                    silence_duration_ms: 150, // быстрее реагируем на паузы (было 500)
-                    eagerness: 'high'         // агрессивно начинаем отвечать
+                    silence_duration_ms: 150  // быстрее реагируем на паузы (было 500)
                 },
                 input_audio_transcription: {
                     model: 'whisper-1'
