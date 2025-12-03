@@ -2,37 +2,44 @@ require('dotenv').config();
 const WebSocket = require('ws');
 const http = require('http');
 const url = require('url');
-const fs = require('fs');      // <-- Добавили для чтения файлов
-const path = require('path');  // <-- Добавили для путей
+const fs = require('fs');
+const path = require('path');
 
 const PORT = process.env.PORT || 8080;
+
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+
+// === ПРОВЕРКА КЛЮЧА ПРИ СТАРТЕ ===
+if (!OPENAI_API_KEY) {
+    console.error("FATAL ERROR: OPENAI_API_KEY is missing in .env!");
+    process.exit(1);
+}
+// Проверка на лишние кавычки (частая ошибка в Docker)
+if (OPENAI_API_KEY.startsWith('"') || OPENAI_API_KEY.startsWith("'")) {
+    console.error("WARNING: Your API Key contains quotes inside the string. Please remove quotes in .env file.");
+}
+console.log(`Key loaded: ${OPENAI_API_KEY.slice(0, 5)}...${OPENAI_API_KEY.slice(-4)}`);
+
 
 let waitingOperator = null;
 
-// === HTTP СЕРВЕР (ОТДАЕТ HTML) ===
 const server = http.createServer((req, res) => {
-    // Если запрос GET и путь корневой '/' или '/operator'
     if (req.method === 'GET' && (req.url === '/' || req.url === '/index.html')) {
         const filePath = path.join(__dirname, 'index.html');
-
         fs.readFile(filePath, (err, content) => {
             if (err) {
                 res.writeHead(500);
-                res.end('Error loading index.html: ' + err.code);
+                res.end('Error loading index.html');
             } else {
                 res.writeHead(200, { 'Content-Type': 'text/html' });
                 res.end(content);
             }
         });
     } else {
-        // Для всех остальных путей (favicon.ico и т.д.)
         res.writeHead(404);
         res.end('Not Found');
     }
 });
-
-// ... (Дальше ваш код createInstruction и WebSocket без изменений) ...
 
 const createInstruction = (inputLang, outputLang) => {
     return `You are a professional real-time translator.
@@ -47,7 +54,6 @@ Rules:
 
 const wss = new WebSocket.Server({ noServer: true });
 
-// === МАРШРУТИЗАЦИЯ WS ===
 server.on('upgrade', (request, socket, head) => {
     const pathname = url.parse(request.url).pathname;
 
@@ -66,23 +72,19 @@ server.on('upgrade', (request, socket, head) => {
     }
 });
 
-// === ЛОГИКА СОЕДИНЕНИЙ ===
 wss.on('connection', (ws) => {
     if (ws.isOperator) {
         console.log('[System] Operator connected via Web');
         waitingOperator = ws;
-
         ws.on('close', () => {
             console.log('[System] Operator disconnected');
             if (waitingOperator === ws) waitingOperator = null;
         });
-
         ws.send(JSON.stringify({ type: 'status', msg: 'Waiting for a call...' }));
         return;
     }
 
     console.log('[SignalWire] Incoming call...');
-
     if (!waitingOperator || waitingOperator.readyState !== WebSocket.OPEN) {
         console.log('[System] No operator available. Rejecting call.');
         ws.close();
@@ -101,17 +103,31 @@ wss.on('connection', (ws) => {
 function startTranslationSession(phoneWs, operatorWs) {
     let streamSid = null;
 
-    // Agent 1: Phone (RU) -> Operator (EN)
-    const ai_RuToEn = new WebSocket('wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01', {
-        headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, "OpenAI-Beta": "realtime=v1" }
-    });
+    console.log('[System] Connecting to OpenAI Realtime API...');
 
-    // Agent 2: Operator (EN) -> Phone (RU)
-    const ai_EnToRu = new WebSocket('wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01', {
-        headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, "OpenAI-Beta": "realtime=v1" }
-    });
+    // Функция создания сокета с логированием
+    const createOpenAISocket = (name) => {
+        const ws = new WebSocket('wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01', {
+            headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, "OpenAI-Beta": "realtime=v1" }
+        });
 
+        ws.on('error', (e) => {
+            console.error(`[OpenAI ${name}] CONNECTION ERROR:`, e.message);
+        });
+
+        ws.on('close', (code, reason) => {
+            console.log(`[OpenAI ${name}] Closed. Code: ${code}, Reason: ${reason.toString()}`);
+        });
+
+        return ws;
+    };
+
+    const ai_RuToEn = createOpenAISocket('Ru->En');
+    const ai_EnToRu = createOpenAISocket('En->Ru');
+
+    // --- НАСТРОЙКА RU -> EN ---
     ai_RuToEn.on('open', () => {
+        console.log('[OpenAI Ru->En] Connected Successfully!');
         const config = {
             type: 'session.update',
             session: {
@@ -126,13 +142,21 @@ function startTranslationSession(phoneWs, operatorWs) {
     });
 
     ai_RuToEn.on('message', (data) => {
-        const response = JSON.parse(data);
-        if (response.type === 'response.audio.delta' && response.delta) {
-            operatorWs.send(JSON.stringify({ type: 'audio', payload: response.delta }));
-        }
+        try {
+            const response = JSON.parse(data);
+            if (response.type === 'error') {
+                console.error('[OpenAI Ru->En] API Error:', response.error.message);
+            }
+            if (response.type === 'response.audio.delta' && response.delta) {
+                // console.log('[Audio] Ru->En chunk received'); // Раскомментировать для дебага
+                operatorWs.send(JSON.stringify({ type: 'audio', payload: response.delta }));
+            }
+        } catch (e) { console.error(e); }
     });
 
+    // --- НАСТРОЙКА EN -> RU ---
     ai_EnToRu.on('open', () => {
+        console.log('[OpenAI En->Ru] Connected Successfully!');
         const config = {
             type: 'session.update',
             session: {
@@ -147,19 +171,24 @@ function startTranslationSession(phoneWs, operatorWs) {
     });
 
     ai_EnToRu.on('message', (data) => {
-        const response = JSON.parse(data);
-        if (response.type === 'response.audio.delta' && response.delta) {
-            if (streamSid) {
-                const msg = {
-                    event: 'media',
-                    streamSid: streamSid,
-                    media: { payload: response.delta }
-                };
-                if (phoneWs.readyState === WebSocket.OPEN) phoneWs.send(JSON.stringify(msg));
+        try {
+            const response = JSON.parse(data);
+            if (response.type === 'error') {
+                console.error('[OpenAI En->Ru] API Error:', response.error.message);
             }
-        }
+            if (response.type === 'response.audio.delta' && response.delta) {
+                if (streamSid && phoneWs.readyState === WebSocket.OPEN) {
+                    phoneWs.send(JSON.stringify({
+                        event: 'media',
+                        streamSid: streamSid,
+                        media: { payload: response.delta }
+                    }));
+                }
+            }
+        } catch (e) { console.error(e); }
     });
 
+    // --- МАРШРУТИЗАЦИЯ ---
     phoneWs.on('message', (message) => {
         try {
             const msg = JSON.parse(message);
