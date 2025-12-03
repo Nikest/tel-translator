@@ -41,20 +41,19 @@ wss.on('connection', (connection) => {
             type: 'session.update',
             session: {
                 modalities: ['text', 'audio'],
-                instructions: `You are a professional real-time translator. 
-Your task is to translate conversation between ${originLang} and ${translatingLang}.
-1. If you hear ${originLang}, translate it to ${translatingLang} and speak.
-2. If you hear ${translatingLang}, translate it to ${originLang} and speak.
-3. Keep your voice neutral. Do not add conversational fillers. Just translate.
-4. IMPORTANT: Always respond immediately after hearing speech.`,
+                instructions: `You are a helpful assistant that translates between ${originLang} and ${translatingLang}. 
+Listen to what the user says and translate it to the other language. Always respond with audio.`,
                 voice: 'alloy',
                 input_audio_format: 'g711_ulaw',
                 output_audio_format: 'g711_ulaw',
                 turn_detection: {
                     type: 'server_vad',
                     threshold: 0.5,
-                    prefix_padding_ms: 300,
-                    silence_duration_ms: 700
+                    prefix_padding_ms: 500,
+                    silence_duration_ms: 1200
+                },
+                input_audio_transcription: {
+                    model: 'whisper-1'
                 },
                 temperature: 0.8,
                 max_response_output_tokens: 4096
@@ -126,7 +125,8 @@ Your task is to translate conversation between ${originLang} and ${translatingLa
                 openAiWs.send(JSON.stringify({
                     type: 'response.create',
                     response: {
-                        modalities: ['text', 'audio']
+                        modalities: ['audio'],
+                        instructions: 'Translate what you heard and respond in audio.'
                     }
                 }));
             }
@@ -159,13 +159,26 @@ Your task is to translate conversation between ${originLang} and ${translatingLa
                 isResponseActive = false;
             }
 
-            // Транскрипция (для отладки)
+            // Транскрипция входящего аудио (для отладки)
             if (response.type === 'conversation.item.input_audio_transcription.completed') {
-                console.log('[OpenAI] User said:', response.transcript);
+                console.log('[OpenAI] 🎤 User said:', response.transcript);
+            }
+
+            // Текст ответа AI (для отладки)
+            if (response.type === 'response.output_item.added') {
+                console.log('[OpenAI] 💬 Response item added:', JSON.stringify(response.item));
+            }
+
+            if (response.type === 'response.content_part.added') {
+                console.log('[OpenAI] 📝 Content part added:', JSON.stringify(response.part));
+            }
+
+            if (response.type === 'response.audio_transcript.delta') {
+                console.log('[OpenAI] 🔊 Audio transcript delta:', response.delta);
             }
 
             if (response.type === 'response.audio_transcript.done') {
-                console.log('[OpenAI] AI translated:', response.transcript);
+                console.log('[OpenAI] ✅ AI translated:', response.transcript);
             }
 
             // Логирование ошибок от OpenAI
