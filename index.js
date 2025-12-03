@@ -1,44 +1,23 @@
 require('dotenv').config();
 const WebSocket = require('ws');
 const http = require('http');
-const url = require('url'); // Подключаем модуль для разбора URL
 
 const PORT = process.env.PORT || 8080;
 
-// HTTP сервер (для health-check и обработки upgrade)
 const server = http.createServer((req, res) => {
-    // Простой ответ для корня, чтобы знать, что сервер жив
-    if (req.method === 'GET') {
-        res.writeHead(200);
-        res.end('Translator Bot is online');
-    }
+    res.writeHead(200);
+    res.end('Translator Bot is running');
 });
 
-// Создаем WS сервер в режиме "noServer" (без автоматической привязки)
-const wss = new WebSocket.Server({ noServer: true });
-
-// Ручная обработка подключения (Handshake)
-server.on('upgrade', (request, socket, head) => {
-    const pathname = url.parse(request.url).pathname;
-
-    // ПРОВЕРКА РОУТА: принимаем только если путь /call
-    if (pathname === '/call') {
-        wss.handleUpgrade(request, socket, head, (ws) => {
-            wss.emit('connection', ws, request);
-        });
-    } else {
-        // Если стучатся на /streams или корень - разрываем соединение
-        console.log(`[Access Denied] Connection attempt on invalid route: ${pathname}`);
-        socket.destroy();
-    }
-});
+const wss = new WebSocket.Server({ server });
 
 wss.on('connection', (connection) => {
-    console.log('[SignalWire] Client connected to /call');
+    console.log('[SignalWire] Client connected');
 
     let streamSid = null;
     let openAiWs = null;
-    let pendingSessionParams = null; // Буфер для параметров
+    // ВАЖНО: Переменная для хранения параметров, если OpenAI еще не готов
+    let pendingSessionParams = null;
 
     const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
@@ -82,9 +61,10 @@ Your task is to translate conversation between ${originLang} and ${translatingLa
 
     openAiWs.on('open', () => {
         console.log('[OpenAI] Connected to Model');
+        // ВАЖНО: Если параметры уже ждут, отправляем их сразу после подключения
         if (pendingSessionParams) {
             sendSessionUpdate(pendingSessionParams.originLang, pendingSessionParams.translatingLang);
-            pendingSessionParams = null;
+            pendingSessionParams = null; // Очищаем
         }
     });
 
@@ -102,6 +82,7 @@ Your task is to translate conversation between ${originLang} and ${translatingLa
             }
 
             if (response.type === 'input_audio_buffer.speech_started') {
+                console.log('[Interruption] User started speaking');
                 connection.send(JSON.stringify({
                     event: 'clear',
                     streamSid: streamSid
@@ -130,9 +111,12 @@ Your task is to translate conversation between ${originLang} and ${translatingLa
                     const originLang = params.originLang || 'Russian';
                     const translatingLang = params.translatingLang || 'English';
 
+                    // ВАЖНО: Проверяем статус подключения
                     if (openAiWs.readyState === WebSocket.OPEN) {
                         sendSessionUpdate(originLang, translatingLang);
                     } else {
+                        // Если еще не подключились, сохраняем на будущее
+                        console.log('[SignalWire] OpenAI connecting... parameters queued.');
                         pendingSessionParams = { originLang, translatingLang };
                     }
                     break;
@@ -148,6 +132,7 @@ Your task is to translate conversation between ${originLang} and ${translatingLa
                     break;
 
                 case 'stop':
+                    console.log(`[SignalWire] Stream Stopped: ${streamSid}`);
                     if (openAiWs.readyState === WebSocket.OPEN) openAiWs.close();
                     break;
             }
