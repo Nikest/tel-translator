@@ -17,11 +17,6 @@
             text-align: center; position: relative; overflow: hidden;
             transition: all 0.3s ease;
         }
-        .call-card::before {
-            content: ""; position: absolute; inset: -40%;
-            background: conic-gradient(from 220deg, rgba(34,197,94,0.32), rgba(239,68,68,0.32), transparent, transparent, rgba(56,189,248,0.26), transparent);
-            opacity: 0.3; filter: blur(28px); z-index: -1;
-        }
         .call-status { font-size: 0.9rem; letter-spacing: 0.14em; text-transform: uppercase; color: #9ca3af; margin-bottom: 10px; }
         .call-number { font-size: 1.4rem; font-weight: 600; color: #e5e7eb; margin-bottom: 4px; }
         .call-sub { font-size: 0.9rem; color: #9ca3af; margin-bottom: 24px; }
@@ -29,7 +24,7 @@
             border: none; outline: none; cursor: pointer; padding: 14px 26px; font-size: 1rem; font-weight: 600;
             border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; gap: 10px;
             letter-spacing: 0.04em; text-transform: uppercase; color: #f9fafb; width: 100%;
-            transition: transform 0.12s, box-shadow 0.12s, filter 0.12s;
+            transition: transform 0.12s;
         }
         .call-button:hover { transform: translateY(-1px); filter: brightness(1.1); }
         .call-button:active { transform: translateY(1px); filter: brightness(0.95); }
@@ -43,9 +38,7 @@
 <div id="connectContainer" class="call-card">
     <div class="call-status">System Offline</div>
     <div class="call-sub">Connect to operator network</div>
-    <button id="btnConnect" class="call-button answer">
-        <span>Connect to Server</span>
-    </button>
+    <button id="btnConnect" class="call-button answer"><span>Connect to Server</span></button>
 </div>
 
 <div id="operatorContainer" class="call-card hidden">
@@ -53,35 +46,24 @@
     <div id="callerNumber" class="call-number">---</div>
     <div id="callerSub" class="call-sub">Waiting for incoming call</div>
 
-    <button id="btnWaiting" class="call-button wait">
-        <span>Waiting for call...</span>
-    </button>
-
-    <button id="btnAnswer" class="call-button answer hidden">
-        <span>📞 Answer Call</span>
-    </button>
-
-    <button id="btnEnd" class="call-button end hidden">
-        <span>✕ End Call</span>
-    </button>
+    <button id="btnWaiting" class="call-button wait"><span>Waiting for call...</span></button>
+    <button id="btnAnswer" class="call-button answer hidden"><span>📞 Answer Call</span></button>
+    <button id="btnEnd" class="call-button end hidden"><span>✕ End Call</span></button>
 </div>
 
 <script>
-    // --- КОНФИГУРАЦИЯ ---
-    // Используем относительный путь для WebSocket (автоматически wss:// если https://)
     const PROTOCOL = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const WS_URL = `${PROTOCOL}//${window.location.host}/operator`;
-    const SAMPLE_RATE = 24000; // OpenAI Realtime предпочитает 24kHz
+    const SAMPLE_RATE = 24000;
 
-    // --- СОСТОЯНИЕ ---
     let ws;
     let audioContext;
     let scriptProcessor;
     let mediaStream;
-    let nextStartTime = 0; // Для плавной очереди воспроизведения
+    let nextStartTime = 0;
     let isCallActive = false;
 
-    // --- UI ЭЛЕМЕНТЫ ---
+    // UI Elements
     const connectContainer = document.getElementById('connectContainer');
     const operatorContainer = document.getElementById('operatorContainer');
     const statusText = document.getElementById('statusText');
@@ -92,17 +74,13 @@
     const btnAnswer = document.getElementById('btnAnswer');
     const btnEnd = document.getElementById('btnEnd');
 
-    // --- 1. НАЖАТИЕ "CONNECT TO SERVER" ---
-    btnConnect.addEventListener('click', () => {
-        initWebSocket();
-    });
+    btnConnect.addEventListener('click', initWebSocket);
 
     function initWebSocket() {
         ws = new WebSocket(WS_URL);
 
         ws.onopen = () => {
             console.log('Connected to server');
-            // Переключаем UI на экран ожидания
             connectContainer.classList.add('hidden');
             operatorContainer.classList.remove('hidden');
             statusText.innerText = "Online";
@@ -111,152 +89,116 @@
         ws.onmessage = (event) => {
             const data = JSON.parse(event.data);
 
-            // Обработка статусных сообщений
             if (data.type === 'status') {
                 console.log('Status:', data.msg);
-
-                if (data.msg === 'Call Connected!') {
-                    // Звонок пришел! Показываем кнопку ответа
-                    handleIncomingCall();
-                } else if (data.msg === 'Waiting for a call...') {
-                    resetCallUI();
-                }
+                if (data.msg === 'Call Connected!') handleIncomingCall();
+                else if (data.msg === 'Waiting for a call...') resetCallUI();
             }
 
-            // Обработка входящего аудио (от Абонента)
             if (data.type === 'audio' && isCallActive) {
                 playAudioChunk(data.payload);
             }
         };
 
         ws.onclose = () => {
-            alert('Disconnected from server. Refresh to reconnect.');
-            location.reload();
+            console.log('WS Disconnected');
+            statusText.innerText = "Offline";
         };
     }
 
-    // --- 2. ВХОДЯЩИЙ ЗВОНОК ---
-    function handleIncomingCall() {
-        statusText.innerText = "Incoming Call";
-        callerNumber.innerText = "Unknown Caller";
-        callerSub.innerText = "Russian Speaker";
+    // --- ФУНКЦИЯ, КОТОРОЙ НЕ ХВАТАЛО ---
+    function resetCallUI() {
+        statusText.innerText = "Waiting...";
+        statusText.style.color = "#9ca3af";
+        callerNumber.innerText = "---";
+        callerSub.innerText = "Waiting for incoming call";
 
-        btnWaiting.classList.add('hidden');
-        btnAnswer.classList.remove('hidden');
+        btnWaiting.classList.remove('hidden');
+        btnAnswer.classList.add('hidden');
+        btnEnd.classList.add('hidden');
+        isCallActive = false;
 
-        // ВАЖНО: Браузер запрещает играть звук без действия пользователя.
-        // Поэтому мы ждем нажатия на "Answer" для старта AudioContext.
+        // Закрываем микрофон, если был открыт
+        if (audioContext) audioContext.close();
+        audioContext = null;
     }
 
-    // --- 3. НАЖАТИЕ "ANSWER" (СТАРТ АУДИО) ---
+    function handleIncomingCall() {
+        statusText.innerText = "Incoming Call";
+        callerNumber.innerText = "Aboment";
+        callerSub.innerText = "Russian Speaker";
+        btnWaiting.classList.add('hidden');
+        btnAnswer.classList.remove('hidden');
+    }
+
     btnAnswer.addEventListener('click', async () => {
         try {
             await startAudioSystem();
-
             isCallActive = true;
             statusText.innerText = "In Call";
-            statusText.style.color = "#22c55e"; // Green
-
+            statusText.style.color = "#22c55e";
             btnAnswer.classList.add('hidden');
             btnEnd.classList.remove('hidden');
-
         } catch (err) {
-            console.error('Mic Access Error:', err);
-            alert('Microphone access is required!');
+            console.error('Mic Error:', err);
+            alert('Microphone access denied!');
         }
     });
 
-    // --- 4. НАЖАТИЕ "END CALL" ---
     btnEnd.addEventListener('click', () => {
-        // Просто перезагружаем страницу для сброса (простейший способ)
         location.reload();
     });
 
-    // ==========================================
-    // === АУДИО ЛОГИКА (СЛОЖНАЯ ЧАСТЬ) ===
-    // ==========================================
-
+    // --- AUDIO LOGIC ---
     async function startAudioSystem() {
-        // 1. Создаем AudioContext
-        audioContext = new (window.AudioContext || window.webkitAudioContext)({
-            sampleRate: SAMPLE_RATE
-        });
+        audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
+
+        // ВАЖНО: Resume контекста
+        if (audioContext.state === 'suspended') {
+            await audioContext.resume();
+        }
 
         nextStartTime = audioContext.currentTime;
 
-        // 2. Захватываем микрофон
         mediaStream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-                channelCount: 1,
-                sampleRate: SAMPLE_RATE,
-                echoCancellation: true,
-                noiseSuppression: true
-            }
+            audio: { channelCount: 1, sampleRate: SAMPLE_RATE, echoCancellation: true, noiseSuppression: true }
         });
 
         const source = audioContext.createMediaStreamSource(mediaStream);
-
-        // 3. Создаем процессор для захвата raw PCM (deprecated, но работает везде для простых задач)
-        // bufferSize 2048 дает баланс между задержкой и стабильностью
         scriptProcessor = audioContext.createScriptProcessor(2048, 1, 1);
 
         source.connect(scriptProcessor);
         scriptProcessor.connect(audioContext.destination);
 
-        // 4. Обработка данных с микрофона
         scriptProcessor.onaudioprocess = (e) => {
             if (!isCallActive || ws.readyState !== WebSocket.OPEN) return;
-
-            const inputData = e.inputBuffer.getChannelData(0); // Float32 Array
-
-            // Конвертируем Float32 в Int16 (PCM)
+            const inputData = e.inputBuffer.getChannelData(0);
             const pcm16 = floatTo16BitPCM(inputData);
-
-            // Конвертируем в Base64 и отправляем
             const base64Audio = arrayBufferToBase64(pcm16);
-
-            ws.send(JSON.stringify({
-                type: 'audio',
-                payload: base64Audio
-            }));
+            ws.send(JSON.stringify({ type: 'audio', payload: base64Audio }));
         };
     }
 
-    // --- ВОСПРОИЗВЕДЕНИЕ АУДИО (SERVER -> SPEAKER) ---
     function playAudioChunk(base64String) {
         if (!audioContext) return;
-
-        // Декодируем Base64 в ArrayBuffer
         const arrayBuffer = base64ToArrayBuffer(base64String);
         const int16Array = new Int16Array(arrayBuffer);
-
-        // Конвертируем Int16 обратно в Float32 для браузера
         const float32Array = new Float32Array(int16Array.length);
         for (let i = 0; i < int16Array.length; i++) {
             float32Array[i] = int16Array[i] / 32768.0;
         }
-
-        // Создаем аудио-буфер
         const audioBuffer = audioContext.createBuffer(1, float32Array.length, SAMPLE_RATE);
         audioBuffer.copyToChannel(float32Array, 0);
-
-        // Планируем воспроизведение без наложений
         const source = audioContext.createBufferSource();
         source.buffer = audioBuffer;
         source.connect(audioContext.destination);
 
         const currentTime = audioContext.currentTime;
-        // Если очередь отстала от времени (пауза), сбрасываем
         if (nextStartTime < currentTime) nextStartTime = currentTime;
-
         source.start(nextStartTime);
-        // Сдвигаем время следующего куска на длительность текущего
         nextStartTime += audioBuffer.duration;
     }
 
-    // --- УТИЛИТЫ (HELPER FUNCTIONS) ---
-
-    // Конвертер Float32 (Browser Mic) -> Int16 (Server)
     function floatTo16BitPCM(input) {
         const output = new Int16Array(input.length);
         for (let i = 0; i < input.length; i++) {
@@ -266,28 +208,21 @@
         return output.buffer;
     }
 
-    // Base64 -> ArrayBuffer
     function base64ToArrayBuffer(base64) {
         const binaryString = window.atob(base64);
         const len = binaryString.length;
         const bytes = new Uint8Array(len);
-        for (let i = 0; i < len; i++) {
-            bytes[i] = binaryString.charCodeAt(i);
-        }
+        for (let i = 0; i < len; i++) { bytes[i] = binaryString.charCodeAt(i); }
         return bytes.buffer;
     }
 
-    // ArrayBuffer -> Base64
     function arrayBufferToBase64(buffer) {
         let binary = '';
         const bytes = new Uint8Array(buffer);
         const len = bytes.byteLength;
-        for (let i = 0; i < len; i++) {
-            binary += String.fromCharCode(bytes[i]);
-        }
+        for (let i = 0; i < len; i++) { binary += String.fromCharCode(bytes[i]); }
         return window.btoa(binary);
     }
-
 </script>
 </body>
 </html>
