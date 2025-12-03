@@ -1,0 +1,13 @@
+{
+  "name": "signalwire-translator",
+  "version": "1.0.0",
+  "description": "Real-time translator bot for SignalWire using OpenAI Realtime API",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0",
+    "dotenv": "^16.4.5"
+  }
+}
