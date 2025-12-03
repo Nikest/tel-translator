@@ -120,14 +120,21 @@ IMPORTANT: Always respond with BOTH text and audio. Never skip the audio output.
                 }));
             }
 
-            // Буфер закоммичен - запрашиваем ответ
+            // Буфер закоммичен - НЕ создаём ответ сразу, ждём транскрипцию
             if (response.type === 'input_audio_buffer.committed') {
-                console.log('[OpenAI] Buffer committed - creating response');
+                console.log('[OpenAI] Buffer committed - waiting for transcription...');
+                // НЕ отправляем response.create здесь!
+            }
+
+            // Транскрипция входящего аудио - ТЕПЕРЬ создаём ответ
+            if (response.type === 'conversation.item.input_audio_transcription.completed') {
+                console.log('[OpenAI] 🎤 User said:', response.transcript);
+                console.log('[OpenAI] Now creating response...');
                 openAiWs.send(JSON.stringify({
                     type: 'response.create',
                     response: {
                         modalities: ['audio', 'text'],
-                        instructions: 'Translate what you just heard to the English language and speak it out loud. Always provide audio output.'
+                        instructions: 'Translate what you just heard to the other language and speak it out loud. Always provide audio output.'
                     }
                 }));
             }
