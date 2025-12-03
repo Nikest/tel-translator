@@ -40,9 +40,10 @@ wss.on('connection', (connection) => {
         const sessionConfig = {
             type: 'session.update',
             session: {
-                modalities: ['text', 'audio'],
-                instructions: `You are a helpful assistant that translates between ${originLang} and ${translatingLang}. 
-Listen to what the user says and translate it to the other language. Always respond with audio.`,
+                modalities: ['audio', 'text'],
+                instructions: `You are a translator between ${originLang} and ${translatingLang}. 
+When you hear speech, translate it to the other language and speak the translation.
+IMPORTANT: Always respond with BOTH text and audio. Never skip the audio output.`,
                 voice: 'alloy',
                 input_audio_format: 'g711_ulaw',
                 output_audio_format: 'g711_ulaw',
@@ -125,8 +126,8 @@ Listen to what the user says and translate it to the other language. Always resp
                 openAiWs.send(JSON.stringify({
                     type: 'response.create',
                     response: {
-                        modalities: ['audio'],
-                        instructions: 'Translate what you heard and respond in audio.'
+                        modalities: ['audio', 'text'],
+                        instructions: 'Translate what you just heard to the English language and speak it out loud. Always provide audio output.'
                     }
                 }));
             }
