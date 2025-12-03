@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>OPERATOR</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+
+        body {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: radial-gradient(circle at top, #1e293b 0, #020617 55%, #000 100%);
+            color: #e5e7eb;
+        }
+
+        .call-card {
+            background: rgba(15, 23, 42, 0.9);
+            border-radius: 24px;
+            padding: 32px 32px 28px;
+            width: 320px;
+            box-shadow:
+                    0 18px 40px rgba(0, 0, 0, 0.55),
+                    0 0 0 1px rgba(148, 163, 184, 0.15);
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .call-card::before {
+            content: "";
+            position: absolute;
+            inset: -40%;
+            background: conic-gradient(
+                    from 220deg,
+                    rgba(34, 197, 94, 0.32),
+                    rgba(239, 68, 68, 0.32),
+                    transparent,
+                    transparent,
+                    rgba(56, 189, 248, 0.26),
+                    transparent
+            );
+            opacity: 0.3;
+            filter: blur(28px);
+            z-index: -1;
+        }
+
+        .call-status {
+            font-size: 0.9rem;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: #9ca3af;
+            margin-bottom: 10px;
+        }
+
+        .call-number {
+            font-size: 1.4rem;
+            font-weight: 600;
+            color: #e5e7eb;
+            margin-bottom: 4px;
+        }
+
+        .call-sub {
+            font-size: 0.9rem;
+            color: #9ca3af;
+            margin-bottom: 24px;
+        }
+
+        .call-button {
+            border: none;
+            outline: none;
+            cursor: pointer;
+            padding: 14px 26px;
+            font-size: 1rem;
+            font-weight: 600;
+            border-radius: 999px;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            transition:
+                    transform 0.12s ease,
+                    box-shadow 0.12s ease,
+                    filter 0.12s ease,
+                    background 0.2s ease;
+            color: #f9fafb;
+        }
+
+        .call-button span.icon {
+            display: inline-flex;
+            width: 20px;
+            height: 20px;
+            border-radius: 999px;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.85rem;
+            background: rgba(15, 23, 42, 0.18);
+        }
+
+        /* Стиль для кнопки "Ответить на звонок" */
+        .call-button.answer {
+            background: linear-gradient(135deg, #22c55e, #16a34a);
+            box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.5), 0 12px 26px rgba(34, 197, 94, 0.45);
+        }
+
+        /* Стиль для кнопки "Завершить звонок" */
+        .call-button.end {
+            background: linear-gradient(135deg, #ef4444, #b91c1c);
+            box-shadow: 0 0 0 1px rgba(248, 113, 113, 0.5), 0 12px 26px rgba(239, 68, 68, 0.5);
+        }
+
+        .call-button:hover {
+            transform: translateY(-1px);
+            filter: brightness(1.08);
+            box-shadow:
+                    0 0 0 1px rgba(248, 250, 252, 0.3),
+                    0 18px 38px rgba(15, 23, 42, 0.9);
+        }
+
+        .call-button:active {
+            transform: translateY(1px) scale(0.98);
+            box-shadow: 0 6px 16px rgba(15, 23, 42, 0.8);
+            filter: brightness(0.97);
+        }
+
+        .call-button:focus-visible {
+            outline: 2px solid #e5e7eb;
+            outline-offset: 3px;
+        }
+    </style>
+</head>
+<body>
+<div class="call-card">
+    <div class="call-status">Incoming Call</div>
+    <div class="call-number">+1 (201) 502-9830</div>
+    <div class="call-sub">Russian abonent</div>
+
+    <!-- ВАРИАНТ 1: Ответить на звонок -->
+    <button class="call-button answer">
+        <span class="icon">📞</span>
+        <span>Answer Call</span>
+    </button>
+
+    <!--
+    ВАРИАНТ 2: Завершить звонок (замени кнопку выше на эту)
+
+    <button class="call-button end">
+      <span class="icon">✕</span>
+      <span>End Call</span>
+    </button>
+    -->
+</div>
+</body>
+</html>
