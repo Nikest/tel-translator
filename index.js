@@ -2,7 +2,28 @@ require('dotenv').config();
 const WebSocket = require('ws');
 const http = require('http');
 
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT |
+
+    | 8080;
+
+// ==============================================================================
+// CONFIGURATION & TUNING
+// ==============================================================================
+// 1. Half-Duplex Mode: The most robust fix for PSTN Echo.
+//    If true, the bot ignores ALL user input while it is speaking.
+//    This effectively functions as a software Echo Suppressor.
+const ENFORCE_HALF_DUPLEX = true;
+
+// 2. VAD Sensitivity:
+//    0.5 is default. 0.6 or 0.7 makes it harder for echo to trigger interruption.
+const VAD_THRESHOLD = 0.6;
+
+// 3. Echo Debounce:
+//    Time (ms) to keep the mic closed AFTER the AI finishes sending audio.
+//    This accounts for network traversal time (Node -> SignalWire -> Phone).
+//    Echo can arrive 200-500ms after the server finishes sending.
+const ECHO_DEBOUNCE_MS = 500;
+// ==============================================================================
 
 const server = http.createServer((req, res) => {
     res.writeHead(200);
@@ -12,12 +33,15 @@ const server = http.createServer((req, res) => {
 const wss = new WebSocket.Server({ server });
 
 wss.on('connection', (connection) => {
-    console.log('[SignalWire] Client connected');
+    console.log(' Client connected');
 
     let streamSid = null;
     let openAiWs = null;
-    // ВАЖНО: Переменная для хранения параметров, если OpenAI еще не готов
     let pendingSessionParams = null;
+
+    // STATE MACHINE FOR ECHO PREVENTION
+    let isAiSpeaking = false;
+    let debounceTimer = null;
 
     const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
@@ -49,7 +73,8 @@ Your task is to translate conversation between ${originLang} and ${translatingLa
                 output_audio_format: 'g711_ulaw',
                 turn_detection: {
                     type: 'server_vad',
-                    threshold: 0.5,
+                    // TUNING: Increasing threshold to ignore low-volume echo
+                    threshold: VAD_THRESHOLD,
                     prefix_padding_ms: 300,
                     silence_duration_ms: 600
                 }
@@ -61,10 +86,9 @@ Your task is to translate conversation between ${originLang} and ${translatingLa
 
     openAiWs.on('open', () => {
         console.log('[OpenAI] Connected to Model');
-        // ВАЖНО: Если параметры уже ждут, отправляем их сразу после подключения
         if (pendingSessionParams) {
             sendSessionUpdate(pendingSessionParams.originLang, pendingSessionParams.translatingLang);
-            pendingSessionParams = null; // Очищаем
+            pendingSessionParams = null;
         }
     });
 
@@ -72,7 +96,16 @@ Your task is to translate conversation between ${originLang} and ${translatingLa
         try {
             const response = JSON.parse(data);
 
+            // -----------------------------------------------------------------
+            // EVENT: AI SENDING AUDIO (Start of Echo Risk)
+            // -----------------------------------------------------------------
             if (response.type === 'response.audio.delta' && response.delta) {
+                // Lock the gate immediately
+                isAiSpeaking = true;
+
+                // Clear any pending unlock timer (if we started speaking again quickly)
+                if (debounceTimer) clearTimeout(debounceTimer);
+
                 const msg = {
                     event: 'media',
                     streamSid: streamSid,
@@ -81,8 +114,32 @@ Your task is to translate conversation between ${originLang} and ${translatingLa
                 connection.send(JSON.stringify(msg));
             }
 
+            // -----------------------------------------------------------------
+            // EVENT: AI FINISHED SENDING (End of Echo Risk + Latency)
+            // -----------------------------------------------------------------
+            if (response.type === 'response.audio.done') {
+                // We do NOT unlock immediately. We wait for the audio to travel
+                // to the phone, play out, and potential echo to return.
+                debounceTimer = setTimeout(() => {
+                    isAiSpeaking = false;
+                    console.log(' Mic Unlocked (Echo Debounce Complete)');
+                }, ECHO_DEBOUNCE_MS);
+            }
+
+            // -----------------------------------------------------------------
+            // EVENT: INTERRUPTION DETECTED
+            // -----------------------------------------------------------------
             if (response.type === 'input_audio_buffer.speech_started') {
-                console.log('[Interruption] User started speaking');
+                console.log('[Interruption] OpenAI detected speech');
+
+                // GATE CHECK: If we are speaking, this is likely ECHO.
+                if (ENFORCE_HALF_DUPLEX && isAiSpeaking) {
+                    console.log('[Interruption] BLOCKED: AI is currently speaking. Ignoring VAD trigger.');
+                    return;
+                }
+
+                // If valid interruption (AI not speaking):
+                console.log('[Interruption] VALID. Clearing buffer and cancelling.');
                 connection.send(JSON.stringify({
                     event: 'clear',
                     streamSid: streamSid
@@ -105,24 +162,38 @@ Your task is to translate conversation between ${originLang} and ${translatingLa
             switch (msg.event) {
                 case 'start':
                     streamSid = msg.start.streamSid;
-                    console.log(`[SignalWire] Stream Started: ${streamSid}`);
+                    console.log(` Stream Started: ${streamSid}`);
+                    const params = msg.start.customParameters |
 
-                    const params = msg.start.customParameters || {};
-                    const originLang = params.originLang || 'Russian';
-                    const translatingLang = params.translatingLang || 'English';
+                        | {};
+                    const originLang = params.originLang |
 
-                    // ВАЖНО: Проверяем статус подключения
+                        | 'Russian';
+                    const translatingLang = params.translatingLang |
+
+                        | 'English';
+
                     if (openAiWs.readyState === WebSocket.OPEN) {
                         sendSessionUpdate(originLang, translatingLang);
                     } else {
-                        // Если еще не подключились, сохраняем на будущее
-                        console.log('[SignalWire] OpenAI connecting... parameters queued.');
+                        console.log(' OpenAI connecting... parameters queued.');
                         pendingSessionParams = { originLang, translatingLang };
                     }
                     break;
 
                 case 'media':
+                    // -----------------------------------------------------------------
+                    // CRITICAL FIX: THE ECHO GATE
+                    // -----------------------------------------------------------------
                     if (openAiWs.readyState === WebSocket.OPEN) {
+                        // If Half-Duplex is on and AI is speaking, we DROP the packet.
+                        // We do not send it to OpenAI.
+                        // This prevents OpenAI from hearing the echo.
+                        if (ENFORCE_HALF_DUPLEX && isAiSpeaking) {
+                            // Packet dropped.
+                            return;
+                        }
+
                         const audioAppend = {
                             type: 'input_audio_buffer.append',
                             audio: msg.media.payload
@@ -132,17 +203,17 @@ Your task is to translate conversation between ${originLang} and ${translatingLa
                     break;
 
                 case 'stop':
-                    console.log(`[SignalWire] Stream Stopped: ${streamSid}`);
+                    console.log(` Stream Stopped: ${streamSid}`);
                     if (openAiWs.readyState === WebSocket.OPEN) openAiWs.close();
                     break;
             }
         } catch (e) {
-            console.error('[SignalWire] Message error:', e);
+            console.error(' Message error:', e);
         }
     });
 
     connection.on('close', () => {
-        console.log('[SignalWire] Client disconnected');
+        console.log(' Client disconnected');
         if (openAiWs && openAiWs.readyState === WebSocket.OPEN) openAiWs.close();
     });
 });
