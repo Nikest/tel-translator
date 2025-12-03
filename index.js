@@ -19,6 +19,7 @@ wss.on('connection', (connection) => {
     let sessionReady = false;
     let audioQueue = [];
     let pendingSessionParams = null;
+    let isResponseActive = false; // Флаг активного ответа от OpenAI
 
     const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
@@ -53,7 +54,7 @@ Your task is to translate conversation between ${originLang} and ${translatingLa
                     type: 'server_vad',
                     threshold: 0.5,
                     prefix_padding_ms: 300,
-                    silence_duration_ms: 800
+                    silence_duration_ms: 700
                 },
                 temperature: 0.8,
                 max_response_output_tokens: 4096
@@ -98,6 +99,17 @@ Your task is to translate conversation between ${originLang} and ${translatingLa
             // Пользователь начал говорить
             if (response.type === 'input_audio_buffer.speech_started') {
                 console.log('[OpenAI] Speech started');
+
+                // ВАЖНО: Прерываем только если идет активный ответ
+                if (isResponseActive) {
+                    console.log('[Interruption] User interrupted during response - clearing');
+                    connection.send(JSON.stringify({
+                        event: 'clear',
+                        streamSid: streamSid
+                    }));
+                    openAiWs.send(JSON.stringify({ type: 'response.cancel' }));
+                    isResponseActive = false;
+                }
             }
 
             // Пользователь закончил говорить - коммитим буфер
@@ -114,10 +126,15 @@ Your task is to translate conversation between ${originLang} and ${translatingLa
                 openAiWs.send(JSON.stringify({
                     type: 'response.create',
                     response: {
-                        modalities: ['text', 'audio'],
-                        instructions: 'Translate the speech you just heard and respond in audio format.'
+                        modalities: ['text', 'audio']
                     }
                 }));
+            }
+
+            // Начался ответ от AI
+            if (response.type === 'response.audio_transcript.delta' ||
+                response.type === 'response.audio.delta') {
+                isResponseActive = true;
             }
 
             // Получаем чанки переведенного аудио
@@ -134,26 +151,30 @@ Your task is to translate conversation between ${originLang} and ${translatingLa
             // Ответ завершен
             if (response.type === 'response.audio.done') {
                 console.log('[OpenAI] Audio response completed');
+                isResponseActive = false;
             }
 
-            // Обработка прерывания (пользователь начал говорить во время ответа)
-            if (response.type === 'input_audio_buffer.speech_started') {
-                console.log('[Interruption] User interrupted - clearing output');
-                connection.send(JSON.stringify({
-                    event: 'clear',
-                    streamSid: streamSid
-                }));
-                openAiWs.send(JSON.stringify({ type: 'response.cancel' }));
+            if (response.type === 'response.done') {
+                console.log('[OpenAI] Full response done');
+                isResponseActive = false;
             }
 
             // Транскрипция (для отладки)
             if (response.type === 'conversation.item.input_audio_transcription.completed') {
-                console.log('[OpenAI] Transcription:', response.transcript);
+                console.log('[OpenAI] User said:', response.transcript);
+            }
+
+            if (response.type === 'response.audio_transcript.done') {
+                console.log('[OpenAI] AI translated:', response.transcript);
             }
 
             // Логирование ошибок от OpenAI
             if (response.type === 'error') {
-                console.error('[OpenAI] Error response:', JSON.stringify(response.error));
+                console.error('[OpenAI] Error:', JSON.stringify(response.error));
+                // Если ошибка связана с пустым буфером, игнорируем - это нормально при прерывании
+                if (response.error.code !== 'input_audio_buffer_commit_empty') {
+                    console.error('[OpenAI] Critical error, may need attention');
+                }
             }
         } catch (e) {
             console.error('[OpenAI] Error processing message:', e);
@@ -179,13 +200,12 @@ Your task is to translate conversation between ${originLang} and ${translatingLa
                 case 'start':
                     streamSid = msg.start.streamSid;
                     console.log(`[SignalWire] Stream Started: ${streamSid}`);
-                    console.log('[SignalWire] Full start message:', JSON.stringify(msg.start, null, 2));
 
                     const params = msg.start.customParameters || msg.start.parameters || {};
                     const originLang = params.originLang || 'Russian';
                     const translatingLang = params.translatingLang || 'English';
 
-                    console.log('[SignalWire] Parameters:', { originLang, translatingLang });
+                    console.log('[SignalWire] Translation:', `${originLang} <-> ${translatingLang}`);
 
                     if (openAiWs.readyState === WebSocket.OPEN) {
                         sendSessionUpdate(originLang, translatingLang);
@@ -218,6 +238,10 @@ Your task is to translate conversation between ${originLang} and ${translatingLa
                     if (openAiWs && openAiWs.readyState === WebSocket.OPEN) {
                         openAiWs.close();
                     }
+                    break;
+
+                case 'connected':
+                    console.log('[SignalWire] Connection confirmed');
                     break;
 
                 default:
