@@ -14,7 +14,7 @@ const ENFORCE_HALF_DUPLEX = true;
 
 // 2. VAD Sensitivity:
 //    0.5 is default. 0.6 or 0.7 makes it harder for echo to trigger interruption.
-const VAD_THRESHOLD = 0.6;
+const VAD_THRESHOLD = 0.5;
 
 // 3. Echo Debounce:
 //    Time (ms) to keep the mic closed AFTER the AI finishes sending audio.
