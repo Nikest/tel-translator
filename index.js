@@ -2,9 +2,7 @@ require('dotenv').config();
 const WebSocket = require('ws');
 const http = require('http');
 
-const PORT = process.env.PORT |
-
-    | 8080;
+const PORT = process.env.PORT || 8080;
 
 // ==============================================================================
 // CONFIGURATION & TUNING
@@ -163,15 +161,9 @@ Your task is to translate conversation between ${originLang} and ${translatingLa
                 case 'start':
                     streamSid = msg.start.streamSid;
                     console.log(` Stream Started: ${streamSid}`);
-                    const params = msg.start.customParameters |
-
-                        | {};
-                    const originLang = params.originLang |
-
-                        | 'Russian';
-                    const translatingLang = params.translatingLang |
-
-                        | 'English';
+                    const params = msg.start.customParameters || {};
+                    const originLang = params.originLang || 'Russian';
+                    const translatingLang = params.translatingLang || 'English';
 
                     if (openAiWs.readyState === WebSocket.OPEN) {
                         sendSessionUpdate(originLang, translatingLang);
