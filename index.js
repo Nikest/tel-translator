@@ -98,10 +98,7 @@ Your task is to translate conversation between ${originLang} and ${translatingLa
             // EVENT: AI SENDING AUDIO (Start of Echo Risk)
             // -----------------------------------------------------------------
             if (response.type === 'response.audio.delta' && response.delta) {
-                // Lock the gate immediately
                 isAiSpeaking = true;
-
-                // Clear any pending unlock timer (if we started speaking again quickly)
                 if (debounceTimer) clearTimeout(debounceTimer);
 
                 const msg = {
@@ -116,8 +113,6 @@ Your task is to translate conversation between ${originLang} and ${translatingLa
             // EVENT: AI FINISHED SENDING (End of Echo Risk + Latency)
             // -----------------------------------------------------------------
             if (response.type === 'response.audio.done') {
-                // We do NOT unlock immediately. We wait for the audio to travel
-                // to the phone, play out, and potential echo to return.
                 debounceTimer = setTimeout(() => {
                     isAiSpeaking = false;
                     console.log(' Mic Unlocked (Echo Debounce Complete)');
@@ -130,19 +125,21 @@ Your task is to translate conversation between ${originLang} and ${translatingLa
             if (response.type === 'input_audio_buffer.speech_started') {
                 console.log('[Interruption] OpenAI detected speech');
 
-                // GATE CHECK: If we are speaking, this is likely ECHO.
+                // 1. ECHO CHECK: If AI is speaking, this is likely echo.
+                // We ignore it. The 'media' handler already dropped the packets,
+                // so this event shouldn't ideally fire for echo, but if it does, we exit.
                 if (ENFORCE_HALF_DUPLEX && isAiSpeaking) {
-                    console.log('[Interruption] BLOCKED: AI is currently speaking. Ignoring VAD trigger.');
+                    console.log('[Interruption] BLOCKED: AI is speaking. Ignoring.');
                     return;
                 }
 
-                // If valid interruption (AI not speaking):
-                console.log('[Interruption] VALID. Clearing buffer and cancelling.');
-                connection.send(JSON.stringify({
-                    event: 'clear',
-                    streamSid: streamSid
-                }));
-                openAiWs.send(JSON.stringify({ type: 'response.cancel' }));
+                // 2. VALID USER INPUT: The AI was silent, and the user spoke.
+                // CRITICAL FIX: We do NOT send 'response.cancel' here.
+                // We want OpenAI to process this input and generate a reply.
+                console.log('[Interruption] VALID. User is speaking. Listening...');
+
+                // Note: We also don't need to send 'clear' to SignalWire because
+                // the bot wasn't speaking, so there is nothing to clear.
             }
         } catch (e) {
             console.error('[OpenAI] Error processing message:', e);
