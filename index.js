@@ -6,20 +6,14 @@ const fs = require('fs');
 const path = require('path');
 
 const PORT = process.env.PORT || 8080;
-
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-// === ПРОВЕРКА КЛЮЧА ПРИ СТАРТЕ ===
+// === ПРОВЕРКИ ===
 if (!OPENAI_API_KEY) {
-    console.error("FATAL ERROR: OPENAI_API_KEY is missing in .env!");
+    console.error("FATAL ERROR: OPENAI_API_KEY is missing!");
     process.exit(1);
 }
-// Проверка на лишние кавычки (частая ошибка в Docker)
-if (OPENAI_API_KEY.startsWith('"') || OPENAI_API_KEY.startsWith("'")) {
-    console.error("WARNING: Your API Key contains quotes inside the string. Please remove quotes in .env file.");
-}
-console.log(`Key loaded: ${OPENAI_API_KEY.slice(0, 5)}...${OPENAI_API_KEY.slice(-4)}`);
-
+console.log(`Key loaded: ...${OPENAI_API_KEY.slice(-4)}`);
 
 let waitingOperator = null;
 
@@ -28,35 +22,26 @@ const server = http.createServer((req, res) => {
         const filePath = path.join(__dirname, 'index.html');
         fs.readFile(filePath, (err, content) => {
             if (err) {
-                res.writeHead(500);
-                res.end('Error loading index.html');
+                res.writeHead(500); res.end('Error loading index.html');
             } else {
-                res.writeHead(200, { 'Content-Type': 'text/html' });
-                res.end(content);
+                res.writeHead(200, { 'Content-Type': 'text/html' }); res.end(content);
             }
         });
     } else {
-        res.writeHead(404);
-        res.end('Not Found');
+        res.writeHead(404); res.end('Not Found');
     }
 });
 
 const createInstruction = (inputLang, outputLang) => {
-    return `You are a professional real-time translator.
-Task: You will receive audio in ${inputLang}. 
-Action: Translate it strictly into ${outputLang} and speak it out.
-Rules:
-- Do not answer questions.
-- Do not add "I will translate now".
-- Simply repeat the meaning in ${outputLang}.
-- Keep the tone neutral and professional.`
+    return `You are a translator. Translate ${inputLang} to ${outputLang}. 
+    IMPORTANT: Just translate. Do not add intro. 
+    If you hear silence, stay silent.`
 }
 
 const wss = new WebSocket.Server({ noServer: true });
 
 server.on('upgrade', (request, socket, head) => {
     const pathname = url.parse(request.url).pathname;
-
     if (pathname === '/call') {
         wss.handleUpgrade(request, socket, head, (ws) => {
             ws.isOperator = false;
@@ -103,31 +88,33 @@ wss.on('connection', (ws) => {
 function startTranslationSession(phoneWs, operatorWs) {
     let streamSid = null;
 
-    console.log('[System] Connecting to OpenAI Realtime API...');
+    // Вспомогательная функция для пульса в логах (чтобы не спамить)
+    let packetsRu = 0;
+    let packetsEn = 0;
+    const logPulse = (direction) => {
+        if (direction === 'ru') {
+            packetsRu++;
+            if (packetsRu % 50 === 0) process.stdout.write('.'); // Входящие от телефона
+        } else {
+            packetsEn++;
+            if (packetsEn % 50 === 0) process.stdout.write('*'); // Входящие от Оператора
+        }
+    };
 
-    // Функция создания сокета с логированием
     const createOpenAISocket = (name) => {
         const ws = new WebSocket('wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01', {
             headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, "OpenAI-Beta": "realtime=v1" }
         });
-
-        ws.on('error', (e) => {
-            console.error(`[OpenAI ${name}] CONNECTION ERROR:`, e.message);
-        });
-
-        ws.on('close', (code, reason) => {
-            console.log(`[OpenAI ${name}] Closed. Code: ${code}, Reason: ${reason.toString()}`);
-        });
-
+        ws.on('error', (e) => console.error(`\n[OpenAI ${name}] Error:`, e.message));
         return ws;
     };
 
     const ai_RuToEn = createOpenAISocket('Ru->En');
     const ai_EnToRu = createOpenAISocket('En->Ru');
 
-    // --- НАСТРОЙКА RU -> EN ---
+    // === НАСТРОЙКА RU (PHONE) -> EN (OPERATOR) ===
     ai_RuToEn.on('open', () => {
-        console.log('[OpenAI Ru->En] Connected Successfully!');
+        console.log('\n[OpenAI Ru->En] Connected!');
         const config = {
             type: 'session.update',
             session: {
@@ -136,27 +123,37 @@ function startTranslationSession(phoneWs, operatorWs) {
                 voice: 'alloy',
                 input_audio_format: 'g711_ulaw',
                 output_audio_format: 'pcm16',
+                turn_detection: { type: 'server_vad', threshold: 0.5 }
             }
         };
         ai_RuToEn.send(JSON.stringify(config));
+
+        // ТЕСТ: Заставляем бота сказать что-то Оператору сразу
+        setTimeout(() => {
+            ai_RuToEn.send(JSON.stringify({
+                type: 'response.create',
+                response: { modalities: ['audio', 'text'], instructions: 'Say "System Ready" in English' }
+            }));
+        }, 1000);
     });
 
     ai_RuToEn.on('message', (data) => {
         try {
             const response = JSON.parse(data);
-            if (response.type === 'error') {
-                console.error('[OpenAI Ru->En] API Error:', response.error.message);
+
+            // ЛОГИРУЕМ ТО, ЧТО БОТ УСЛЫШАЛ (ТЕКСТ)
+            if (response.type === 'response.audio_transcript.done') {
+                console.log(`\n[RU Heard]: "${response.transcript}"`);
             }
             if (response.type === 'response.audio.delta' && response.delta) {
-                // console.log('[Audio] Ru->En chunk received'); // Раскомментировать для дебага
                 operatorWs.send(JSON.stringify({ type: 'audio', payload: response.delta }));
             }
-        } catch (e) { console.error(e); }
+        } catch (e) {}
     });
 
-    // --- НАСТРОЙКА EN -> RU ---
+    // === НАСТРОЙКА EN (OPERATOR) -> RU (PHONE) ===
     ai_EnToRu.on('open', () => {
-        console.log('[OpenAI En->Ru] Connected Successfully!');
+        console.log('\n[OpenAI En->Ru] Connected!');
         const config = {
             type: 'session.update',
             session: {
@@ -165,6 +162,7 @@ function startTranslationSession(phoneWs, operatorWs) {
                 voice: 'echo',
                 input_audio_format: 'pcm16',
                 output_audio_format: 'g711_ulaw',
+                turn_detection: { type: 'server_vad', threshold: 0.5 }
             }
         };
         ai_EnToRu.send(JSON.stringify(config));
@@ -173,39 +171,32 @@ function startTranslationSession(phoneWs, operatorWs) {
     ai_EnToRu.on('message', (data) => {
         try {
             const response = JSON.parse(data);
-            if (response.type === 'error') {
-                console.error('[OpenAI En->Ru] API Error:', response.error.message);
+
+            // ЛОГИРУЕМ ТО, ЧТО БОТ УСЛЫШАЛ (ТЕКСТ)
+            if (response.type === 'response.audio_transcript.done') {
+                console.log(`\n[EN Heard]: "${response.transcript}"`);
             }
             if (response.type === 'response.audio.delta' && response.delta) {
                 if (streamSid && phoneWs.readyState === WebSocket.OPEN) {
-                    phoneWs.send(JSON.stringify({
-                        event: 'media',
-                        streamSid: streamSid,
-                        media: { payload: response.delta }
-                    }));
+                    phoneWs.send(JSON.stringify({ event: 'media', streamSid: streamSid, media: { payload: response.delta } }));
                 }
             }
-        } catch (e) { console.error(e); }
+        } catch (e) {}
     });
 
-    // --- МАРШРУТИЗАЦИЯ ---
+    // === МАРШРУТИЗАЦИЯ ОТ КЛИЕНТОВ ===
     phoneWs.on('message', (message) => {
         try {
             const msg = JSON.parse(message);
             if (msg.event === 'start') {
                 streamSid = msg.start.streamSid;
-                console.log(`[Call Started] StreamSid: ${streamSid}`);
+                console.log(`\n[Call Started] StreamSid: ${streamSid}`);
             }
             if (msg.event === 'media' && ai_RuToEn.readyState === WebSocket.OPEN) {
-                ai_RuToEn.send(JSON.stringify({
-                    type: 'input_audio_buffer.append',
-                    audio: msg.media.payload
-                }));
+                logPulse('ru'); // Рисуем точку
+                ai_RuToEn.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: msg.media.payload }));
             }
-            if (msg.event === 'stop') {
-                console.log('[Call Ended]');
-                closeAll();
-            }
+            if (msg.event === 'stop') closeAll();
         } catch (e) {}
     });
 
@@ -213,15 +204,14 @@ function startTranslationSession(phoneWs, operatorWs) {
         try {
             const msg = JSON.parse(message);
             if (msg.type === 'audio' && ai_EnToRu.readyState === WebSocket.OPEN) {
-                ai_EnToRu.send(JSON.stringify({
-                    type: 'input_audio_buffer.append',
-                    audio: msg.payload
-                }));
+                logPulse('en'); // Рисуем звездочку
+                ai_EnToRu.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: msg.payload }));
             }
         } catch (e) {}
     });
 
     const closeAll = () => {
+        console.log('\n[System] Closing session');
         if (phoneWs.readyState === WebSocket.OPEN) phoneWs.close();
         if (operatorWs.readyState === WebSocket.OPEN) operatorWs.close();
         if (ai_RuToEn.readyState === WebSocket.OPEN) ai_RuToEn.close();
