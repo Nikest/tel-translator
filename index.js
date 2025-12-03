@@ -19,7 +19,6 @@ wss.on('connection', (connection) => {
     let sessionReady = false;
     let audioQueue = [];
     let pendingSessionParams = null;
-    let isResponseActive = false; // Флаг активного ответа от OpenAI
 
     const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
@@ -41,31 +40,36 @@ wss.on('connection', (connection) => {
             type: 'session.update',
             session: {
                 modalities: ['audio', 'text'],
-                instructions: `You are a translator between ${originLang} and ${translatingLang}. 
-When you hear speech, translate it to the other language and speak the translation.
-IMPORTANT: Always respond with BOTH text and audio. Never skip the audio output.`,
+                instructions: `You are a real-time simultaneous interpreter between ${originLang} and ${translatingLang}.
+
+CRITICAL RULES:
+1. Translate EVERYTHING you hear immediately
+2. If you hear ${originLang}, translate to ${translatingLang}
+3. If you hear ${translatingLang}, translate to ${originLang}
+4. Keep translations natural and accurate
+5. ALWAYS provide audio output for every translation
+6. Do not add any commentary, just translate`,
                 voice: 'alloy',
                 input_audio_format: 'g711_ulaw',
                 output_audio_format: 'g711_ulaw',
                 turn_detection: {
                     type: 'server_vad',
                     threshold: 0.5,
-                    prefix_padding_ms: 500,
-                    silence_duration_ms: 1200
+                    prefix_padding_ms: 300,
+                    silence_duration_ms: 500
                 },
                 input_audio_transcription: {
                     model: 'whisper-1'
                 },
-                temperature: 0.8,
-                max_response_output_tokens: 4096
+                temperature: 0.8
             }
         };
         openAiWs.send(JSON.stringify(sessionConfig));
-        console.log(`[OpenAI] Session update sent: ${originLang} <-> ${translatingLang}`);
+        console.log(`[OpenAI] Session configured: ${originLang} ⟷ ${translatingLang}`);
     };
 
     openAiWs.on('open', () => {
-        console.log('[OpenAI] Connected to Model');
+        console.log('[OpenAI] ✓ Connected to Realtime API');
 
         if (pendingSessionParams) {
             sendSessionUpdate(pendingSessionParams.originLang, pendingSessionParams.translatingLang);
@@ -79,16 +83,13 @@ IMPORTANT: Always respond with BOTH text and audio. Never skip the audio output.
         try {
             const response = JSON.parse(data);
 
-            // Логируем все события для отладки
-            console.log('[OpenAI] Event:', response.type);
-
             // Сессия готова
             if (response.type === 'session.updated') {
                 sessionReady = true;
-                console.log('[OpenAI] Session ready');
+                console.log('[OpenAI] ✓ Session ready');
 
                 if (audioQueue.length > 0) {
-                    console.log(`[OpenAI] Sending ${audioQueue.length} queued audio chunks`);
+                    console.log(`[OpenAI] → Sending ${audioQueue.length} queued audio chunks`);
                     audioQueue.forEach(audioData => {
                         openAiWs.send(JSON.stringify(audioData));
                     });
@@ -96,58 +97,32 @@ IMPORTANT: Always respond with BOTH text and audio. Never skip the audio output.
                 }
             }
 
-            // Пользователь начал говорить
+            // Входящая речь начата
             if (response.type === 'input_audio_buffer.speech_started') {
-                console.log('[OpenAI] Speech started');
-
-                // ВАЖНО: Прерываем только если идет активный ответ
-                if (isResponseActive) {
-                    console.log('[Interruption] User interrupted during response - clearing');
-                    connection.send(JSON.stringify({
-                        event: 'clear',
-                        streamSid: streamSid
-                    }));
-                    openAiWs.send(JSON.stringify({ type: 'response.cancel' }));
-                    isResponseActive = false;
-                }
+                console.log('[User] 🎤 Speech started');
             }
 
-            // Пользователь закончил говорить - коммитим буфер
+            // Входящая речь остановлена (VAD автоматически коммитит и создаёт ответ)
             if (response.type === 'input_audio_buffer.speech_stopped') {
-                console.log('[OpenAI] Speech stopped - committing buffer');
-                openAiWs.send(JSON.stringify({
-                    type: 'input_audio_buffer.commit'
-                }));
+                console.log('[User] 🎤 Speech stopped (VAD auto-processing)');
             }
 
-            // Буфер закоммичен - НЕ создаём ответ сразу, ждём транскрипцию
-            if (response.type === 'input_audio_buffer.committed') {
-                console.log('[OpenAI] Buffer committed - waiting for transcription...');
-                // НЕ отправляем response.create здесь!
-            }
-
-            // Транскрипция входящего аудио - ТЕПЕРЬ создаём ответ
+            // Транскрипция входящего аудио
             if (response.type === 'conversation.item.input_audio_transcription.completed') {
-                console.log('[OpenAI] 🎤 User said:', response.transcript);
-                console.log('[OpenAI] Now creating response...');
-                openAiWs.send(JSON.stringify({
-                    type: 'response.create',
-                    response: {
-                        modalities: ['audio', 'text'],
-                        instructions: 'Translate what you just heard to the other language and speak it out loud. Always provide audio output.'
-                    }
-                }));
+                console.log(`[User] 📝 "${response.transcript}"`);
             }
 
-            // Начался ответ от AI
-            if (response.type === 'response.audio_transcript.delta' ||
-                response.type === 'response.audio.delta') {
-                isResponseActive = true;
+            // Начало генерации ответа
+            if (response.type === 'response.created') {
+                console.log('[AI] 🤖 Creating translation...');
             }
 
-            // Получаем чанки переведенного аудио
+            // Аудио чанки от AI
             if (response.type === 'response.audio.delta' && response.delta) {
-                console.log('[OpenAI] Audio delta received, length:', response.delta.length);
+                if (!audioQueue.length) {
+                    console.log('[AI] 🔊 Streaming audio...');
+                }
+
                 const msg = {
                     event: 'media',
                     streamSid: streamSid,
@@ -156,58 +131,45 @@ IMPORTANT: Always respond with BOTH text and audio. Never skip the audio output.
                 connection.send(JSON.stringify(msg));
             }
 
-            // Ответ завершен
-            if (response.type === 'response.audio.done') {
-                console.log('[OpenAI] Audio response completed');
-                isResponseActive = false;
-            }
-
-            if (response.type === 'response.done') {
-                console.log('[OpenAI] Full response done');
-                isResponseActive = false;
-            }
-
-            // Транскрипция входящего аудио (для отладки)
-            if (response.type === 'conversation.item.input_audio_transcription.completed') {
-                console.log('[OpenAI] 🎤 User said:', response.transcript);
-            }
-
-            // Текст ответа AI (для отладки)
-            if (response.type === 'response.output_item.added') {
-                console.log('[OpenAI] 💬 Response item added:', JSON.stringify(response.item));
-            }
-
-            if (response.type === 'response.content_part.added') {
-                console.log('[OpenAI] 📝 Content part added:', JSON.stringify(response.part));
-            }
-
-            if (response.type === 'response.audio_transcript.delta') {
-                console.log('[OpenAI] 🔊 Audio transcript delta:', response.delta);
-            }
-
+            // Транскрипция перевода
             if (response.type === 'response.audio_transcript.done') {
-                console.log('[OpenAI] ✅ AI translated:', response.transcript);
+                console.log(`[AI] ✅ Translated: "${response.transcript}"`);
             }
 
-            // Логирование ошибок от OpenAI
-            if (response.type === 'error') {
-                console.error('[OpenAI] Error:', JSON.stringify(response.error));
-                // Если ошибка связана с пустым буфером, игнорируем - это нормально при прерывании
-                if (response.error.code !== 'input_audio_buffer_commit_empty') {
-                    console.error('[OpenAI] Critical error, may need attention');
+            // Ответ завершён
+            if (response.type === 'response.done') {
+                const hasAudio = response.response?.output?.some(
+                    item => item.type === 'audio'
+                );
+
+                if (hasAudio) {
+                    console.log('[AI] ✓ Translation complete');
+                } else {
+                    console.log('[AI] ⚠️ Response completed but NO AUDIO generated');
+                    console.log('[AI] Response details:', JSON.stringify(response.response));
                 }
             }
+
+            // Ошибки
+            if (response.type === 'error') {
+                // Игнорируем ошибки пустого буфера - это нормально
+                if (response.error.code === 'input_audio_buffer_commit_empty') {
+                    return;
+                }
+                console.error('[OpenAI] ❌ Error:', response.error.message);
+            }
+
         } catch (e) {
-            console.error('[OpenAI] Error processing message:', e);
+            console.error('[OpenAI] ❌ Processing error:', e);
         }
     });
 
     openAiWs.on('error', (error) => {
-        console.error('[OpenAI] WebSocket error:', error);
+        console.error('[OpenAI] ❌ WebSocket error:', error);
     });
 
     openAiWs.on('close', (code, reason) => {
-        console.log(`[OpenAI] Connection closed (code: ${code}, reason: ${reason})`);
+        console.log(`[OpenAI] Connection closed (${code}${reason ? ': ' + reason : ''})`);
         if (connection.readyState === WebSocket.OPEN) {
             connection.close();
         }
@@ -220,21 +182,20 @@ IMPORTANT: Always respond with BOTH text and audio. Never skip the audio output.
             switch (msg.event) {
                 case 'start':
                     streamSid = msg.start.streamSid;
-                    console.log(`[SignalWire] Stream Started: ${streamSid}`);
+                    console.log(`[SignalWire] ✓ Stream started: ${streamSid.substring(0, 8)}...`);
 
                     const params = msg.start.customParameters || msg.start.parameters || {};
                     const originLang = params.originLang || 'Russian';
                     const translatingLang = params.translatingLang || 'English';
 
-                    console.log('[SignalWire] Translation:', `${originLang} <-> ${translatingLang}`);
+                    console.log(`[SignalWire] Languages: ${originLang} ⟷ ${translatingLang}`);
 
                     if (openAiWs.readyState === WebSocket.OPEN) {
                         sendSessionUpdate(originLang, translatingLang);
                     } else if (openAiWs.readyState === WebSocket.CONNECTING) {
-                        console.log('[SignalWire] OpenAI connecting... parameters queued.');
                         pendingSessionParams = { originLang, translatingLang };
                     } else {
-                        console.error('[SignalWire] OpenAI connection failed');
+                        console.error('[SignalWire] ❌ OpenAI not connected');
                         connection.close();
                     }
                     break;
@@ -255,21 +216,18 @@ IMPORTANT: Always respond with BOTH text and audio. Never skip the audio output.
                     break;
 
                 case 'stop':
-                    console.log(`[SignalWire] Stream Stopped: ${streamSid}`);
+                    console.log('[SignalWire] Stream stopped');
                     if (openAiWs && openAiWs.readyState === WebSocket.OPEN) {
                         openAiWs.close();
                     }
                     break;
 
                 case 'connected':
-                    console.log('[SignalWire] Connection confirmed');
+                    console.log('[SignalWire] ✓ Connection confirmed');
                     break;
-
-                default:
-                    console.log(`[SignalWire] Event: ${msg.event}`);
             }
         } catch (e) {
-            console.error('[SignalWire] Message error:', e);
+            console.error('[SignalWire] ❌ Message error:', e);
         }
     });
 
@@ -281,10 +239,11 @@ IMPORTANT: Always respond with BOTH text and audio. Never skip the audio output.
     });
 
     connection.on('error', (error) => {
-        console.error('[SignalWire] WebSocket error:', error);
+        console.error('[SignalWire] ❌ WebSocket error:', error);
     });
 });
 
 server.listen(PORT, () => {
-    console.log(`Translator Bot listening on port ${PORT}`);
+    console.log(`🚀 Translator Bot listening on port ${PORT}`);
+    console.log(`📞 Ready to translate calls`);
 });
