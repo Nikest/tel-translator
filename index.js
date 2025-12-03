@@ -54,7 +54,7 @@ wss.on('connection', (connection) => {
                 input_audio_transcription: {
                     model: 'whisper-1'
                 },
-                temperature: 0.5  // меньше = быстрее и стабильнее (было 0.8)
+                temperature: 0.6
             }
         };
         openAiWs.send(JSON.stringify(sessionConfig));
