@@ -49,7 +49,7 @@ Your task is to translate conversation between ${originLang} and ${translatingLa
                 output_audio_format: 'g711_ulaw',
                 turn_detection: {
                     type: 'server_vad',
-                    threshold: 0.5,
+                    threshold: 0.6,
                     prefix_padding_ms: 300,
                     silence_duration_ms: 600,
                     create_response: true
@@ -84,11 +84,11 @@ Your task is to translate conversation between ${originLang} and ${translatingLa
 
             if (response.type === 'input_audio_buffer.speech_started') {
                 console.log('[Interruption] User started speaking');
-                connection.send(JSON.stringify({
+                /*connection.send(JSON.stringify({
                     event: 'clear',
                     streamSid: streamSid
                 }));
-                openAiWs.send(JSON.stringify({ type: 'response.cancel' }));
+                openAiWs.send(JSON.stringify({ type: 'response.cancel' }));*/
             }
         } catch (e) {
             console.error('[OpenAI] Error processing message:', e);
