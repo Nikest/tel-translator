@@ -31,6 +31,67 @@
         .call-button.answer { background: linear-gradient(135deg, #22c55e, #16a34a); box-shadow: 0 0 0 1px rgba(34,197,94,0.5); }
         .call-button.end { background: linear-gradient(135deg, #ef4444, #b91c1c); box-shadow: 0 0 0 1px rgba(248,113,113,0.5); }
         .call-button.wait { background: #334155; cursor: default; }
+
+        .transcript-box {
+            margin: 16px 0;
+            background: rgba(30, 41, 59, 0.6);
+            border-radius: 12px;
+            padding: 12px;
+            max-height: 300px;
+            overflow-y: auto;
+            border: 1px solid rgba(148, 163, 184, 0.1);
+        }
+
+        .speaking-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            background: rgba(34, 197, 94, 0.15);
+            border-radius: 8px;
+            margin-bottom: 8px;
+            font-size: 0.85rem;
+        }
+
+        .pulse-dot {
+            width: 10px;
+            height: 10px;
+            background: #22c55e;
+            border-radius: 50%;
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.4; transform: scale(0.8); }
+        }
+
+        .transcript-scroll {
+            font-size: 0.85rem;
+            line-height: 1.6;
+        }
+
+        .transcript-item {
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+        }
+
+        .transcript-item:last-child {
+            border-bottom: none;
+        }
+
+        .transcript-label {
+            font-weight: 600;
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 4px;
+        }
+
+        .client-original { color: #60a5fa; }
+        .client-translation { color: #22c55e; }
+        .operator-original { color: #f59e0b; }
+        .operator-translation { color: #a78bfa; }
     </style>
 </head>
 <body>
@@ -45,6 +106,14 @@
     <div id="statusText" class="call-status">Waiting...</div>
     <div id="callerNumber" class="call-number">---</div>
     <div id="callerSub" class="call-sub">Waiting for incoming call</div>
+
+    <div id="transcriptContainer" class="transcript-box hidden">
+        <div id="speakingIndicator" class="speaking-indicator hidden">
+            <span class="pulse-dot"></span>
+            <span id="speakingText">Client is speaking...</span>
+        </div>
+        <div id="transcriptScroll" class="transcript-scroll"></div>
+    </div>
 
     <button id="btnWaiting" class="call-button wait"><span>Waiting for call...</span></button>
     <button id="btnAnswer" class="call-button answer hidden"><span>📞 Answer Call</span></button>
@@ -98,6 +167,14 @@
             if (data.type === 'audio' && isCallActive) {
                 playAudioChunk(data.payload);
             }
+
+            if (data.type === 'speaking') {
+                handleSpeakingIndicator(data.speaker, data.status);
+            }
+
+            if (data.type === 'transcript') {
+                addTranscript(data.speaker, data.text, data.language);
+            }
         };
 
         ws.onclose = () => {
@@ -118,6 +195,11 @@
         btnEnd.classList.add('hidden');
         isCallActive = false;
 
+        // Скрыть и очистить транскрипты
+        document.getElementById('transcriptContainer').classList.add('hidden');
+        document.getElementById('transcriptScroll').innerHTML = '';
+        document.getElementById('speakingIndicator').classList.add('hidden');
+
         // Закрываем микрофон, если был открыт
         if (audioContext) audioContext.close();
         audioContext = null;
@@ -129,6 +211,56 @@
         callerSub.innerText = "Russian Speaker";
         btnWaiting.classList.add('hidden');
         btnAnswer.classList.remove('hidden');
+    }
+
+    function handleSpeakingIndicator(speaker, status) {
+        const indicator = document.getElementById('speakingIndicator');
+        const speakingText = document.getElementById('speakingText');
+
+        if (status === 'started') {
+            indicator.classList.remove('hidden');
+            if (speaker === 'client') {
+                speakingText.innerText = 'Client is speaking...';
+            } else if (speaker === 'operator') {
+                speakingText.innerText = 'You are speaking...';
+            }
+        } else {
+            indicator.classList.add('hidden');
+        }
+    }
+
+    function addTranscript(speaker, text, language) {
+        const container = document.getElementById('transcriptScroll');
+        const div = document.createElement('div');
+        div.className = 'transcript-item';
+
+        let label = '';
+        let colorClass = '';
+
+        if (speaker === 'client') {
+            label = 'Client (RU)';
+            colorClass = 'client-original';
+        } else if (speaker === 'ai_translation' && language === 'en') {
+            label = '→ Translation (EN)';
+            colorClass = 'client-translation';
+        } else if (speaker === 'operator') {
+            label = 'You (EN)';
+            colorClass = 'operator-original';
+        } else if (speaker === 'ai_translation_to_client' && language === 'ru') {
+            label = '→ Translation to Client (RU)';
+            colorClass = 'operator-translation';
+        }
+
+        div.innerHTML = `
+            <div class="transcript-label ${colorClass}">${label}</div>
+            <div>${text}</div>
+        `;
+
+        container.appendChild(div);
+        container.scrollTop = container.scrollHeight;
+
+        // Show container if hidden
+        document.getElementById('transcriptContainer').classList.remove('hidden');
     }
 
     btnAnswer.addEventListener('click', async () => {

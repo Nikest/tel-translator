@@ -127,20 +127,36 @@ function startTranslationSession(phoneWs, operatorWs) {
             type: 'session.update',
             session: {
                 modalities: ['audio', 'text'],
-                instructions: 'You are a real-time interpreter. Translate Russian speech to English. Output only the English translation, nothing else. No commentary, no explanations.',
+                instructions: `You are a professional SIMULTANEOUS interpreter for real-time call translation.
+
+CONTEXT: Customer (Russian) ↔ Operator (English). You translate Russian to English in REAL-TIME.
+
+CRITICAL REQUIREMENTS:
+1. START translating immediately - do NOT wait for complete sentences
+2. Translate phrase-by-phrase as you hear it - CONTINUOUS FLOW
+3. NEVER pause or stop translating if the speaker continues
+4. Keep speaking even if new input arrives - finish your current phrase first
+5. Preserve ALL words, names, numbers, addresses EXACTLY
+6. Maintain emotional tone and urgency
+7. Use natural conversational English for customer service
+8. For unclear audio, translate what you can and continue
+
+SPEED: Prioritize low latency over perfect grammar. Natural flow is critical.
+
+OUTPUT: Only the English translation. No meta-commentary.`,
                 voice: 'alloy',
                 input_audio_format: 'g711_ulaw',
                 output_audio_format: 'pcm16',
                 turn_detection: {
                     type: 'server_vad',
-                    threshold: 0.5,
+                    threshold: 0.3,
                     prefix_padding_ms: 300,
-                    silence_duration_ms: 200
+                    silence_duration_ms: 400
                 },
                 input_audio_transcription: {
                     model: 'whisper-1'
                 },
-                temperature: 0.6
+                temperature: 0.5
             }
         };
         ai_RuToEn.send(JSON.stringify(config));
@@ -164,10 +180,36 @@ function startTranslationSession(phoneWs, operatorWs) {
 
             if (response.type === 'input_audio_buffer.speech_started') {
                 console.log('[Phone] 🎤 Speaking...');
+                if (operatorWs.readyState === WebSocket.OPEN) {
+                    operatorWs.send(JSON.stringify({
+                        type: 'speaking',
+                        speaker: 'client',
+                        status: 'started'
+                    }));
+                }
+            }
+
+            if (response.type === 'input_audio_buffer.speech_stopped') {
+                console.log('[Phone] 🎤 Stopped speaking');
+                if (operatorWs.readyState === WebSocket.OPEN) {
+                    operatorWs.send(JSON.stringify({
+                        type: 'speaking',
+                        speaker: 'client',
+                        status: 'stopped'
+                    }));
+                }
             }
 
             if (response.type === 'conversation.item.input_audio_transcription.completed') {
                 console.log(`[Phone] 📝 "${response.transcript}"`);
+                if (operatorWs.readyState === WebSocket.OPEN) {
+                    operatorWs.send(JSON.stringify({
+                        type: 'transcript',
+                        speaker: 'client',
+                        text: response.transcript,
+                        language: 'ru'
+                    }));
+                }
             }
 
             if (response.type === 'response.audio.delta' && response.delta) {
@@ -182,6 +224,14 @@ function startTranslationSession(phoneWs, operatorWs) {
 
             if (response.type === 'response.audio_transcript.done') {
                 console.log(`[AI→Operator] 🔊 "${response.transcript}"`);
+                if (operatorWs.readyState === WebSocket.OPEN) {
+                    operatorWs.send(JSON.stringify({
+                        type: 'transcript',
+                        speaker: 'ai_translation',
+                        text: response.transcript,
+                        language: 'en'
+                    }));
+                }
             }
 
             if (response.type === 'error') {
@@ -208,20 +258,36 @@ function startTranslationSession(phoneWs, operatorWs) {
             type: 'session.update',
             session: {
                 modalities: ['audio', 'text'],
-                instructions: 'You are a real-time interpreter. Translate English speech to Russian. Output only the Russian translation, nothing else. No commentary, no explanations.',
+                instructions: `You are a professional SIMULTANEOUS interpreter for real-time call translation.
+
+CONTEXT: Operator (English) ↔ Customer (Russian). You translate English to Russian in REAL-TIME.
+
+CRITICAL REQUIREMENTS:
+1. START translating immediately - do NOT wait for complete sentences
+2. Translate phrase-by-phrase as you hear it - CONTINUOUS FLOW
+3. NEVER pause or stop translating if the speaker continues
+4. Keep speaking even if new input arrives - finish your current phrase first
+5. Preserve ALL words, names, numbers, addresses EXACTLY
+6. Maintain professional, polite tone for customer service
+7. Use clear, natural Russian that any customer understands
+8. For unclear audio, translate what you can and continue
+
+SPEED: Prioritize low latency over perfect grammar. Natural flow is critical.
+
+OUTPUT: Only the Russian translation. No meta-commentary.`,
                 voice: 'echo',
                 input_audio_format: 'pcm16',
                 output_audio_format: 'g711_ulaw',
                 turn_detection: {
                     type: 'server_vad',
-                    threshold: 0.5,
+                    threshold: 0.3,
                     prefix_padding_ms: 300,
-                    silence_duration_ms: 200
+                    silence_duration_ms: 400
                 },
                 input_audio_transcription: {
                     model: 'whisper-1'
                 },
-                temperature: 0.6
+                temperature: 0.5
             }
         };
         ai_EnToRu.send(JSON.stringify(config));
@@ -245,10 +311,36 @@ function startTranslationSession(phoneWs, operatorWs) {
 
             if (response.type === 'input_audio_buffer.speech_started') {
                 console.log('[Operator] 🎤 Speaking...');
+                if (operatorWs.readyState === WebSocket.OPEN) {
+                    operatorWs.send(JSON.stringify({
+                        type: 'speaking',
+                        speaker: 'operator',
+                        status: 'started'
+                    }));
+                }
+            }
+
+            if (response.type === 'input_audio_buffer.speech_stopped') {
+                console.log('[Operator] 🎤 Stopped speaking');
+                if (operatorWs.readyState === WebSocket.OPEN) {
+                    operatorWs.send(JSON.stringify({
+                        type: 'speaking',
+                        speaker: 'operator',
+                        status: 'stopped'
+                    }));
+                }
             }
 
             if (response.type === 'conversation.item.input_audio_transcription.completed') {
                 console.log(`[Operator] 📝 "${response.transcript}"`);
+                if (operatorWs.readyState === WebSocket.OPEN) {
+                    operatorWs.send(JSON.stringify({
+                        type: 'transcript',
+                        speaker: 'operator',
+                        text: response.transcript,
+                        language: 'en'
+                    }));
+                }
             }
 
             if (response.type === 'response.audio.delta' && response.delta) {
@@ -264,6 +356,14 @@ function startTranslationSession(phoneWs, operatorWs) {
 
             if (response.type === 'response.audio_transcript.done') {
                 console.log(`[AI→Phone] 🔊 "${response.transcript}"`);
+                if (operatorWs.readyState === WebSocket.OPEN) {
+                    operatorWs.send(JSON.stringify({
+                        type: 'transcript',
+                        speaker: 'ai_translation_to_client',
+                        text: response.transcript,
+                        language: 'ru'
+                    }));
+                }
             }
 
             if (response.type === 'error') {
