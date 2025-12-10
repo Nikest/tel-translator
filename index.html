@@ -92,6 +92,83 @@
         .client-translation { color: #22c55e; }
         .operator-original { color: #f59e0b; }
         .operator-translation { color: #a78bfa; }
+
+        .audio-settings {
+            margin: 16px 0;
+            padding: 12px;
+            background: rgba(30, 41, 59, 0.4);
+            border-radius: 12px;
+            border: 1px solid rgba(148, 163, 184, 0.1);
+        }
+
+        .setting-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        .setting-row:last-child {
+            margin-bottom: 0;
+        }
+
+        .setting-row label {
+            font-size: 0.8rem;
+            color: #9ca3af;
+            min-width: 80px;
+            text-align: left;
+        }
+
+        .device-select {
+            flex: 1;
+            padding: 6px 10px;
+            background: rgba(15, 23, 42, 0.8);
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            border-radius: 8px;
+            color: #e5e7eb;
+            font-size: 0.85rem;
+            cursor: pointer;
+            outline: none;
+        }
+
+        .device-select:hover {
+            border-color: rgba(148, 163, 184, 0.4);
+        }
+
+        .device-select:focus {
+            border-color: #22c55e;
+        }
+
+        .mute-button {
+            flex: 1;
+            padding: 8px 16px;
+            background: rgba(34, 197, 94, 0.15);
+            border: 1px solid rgba(34, 197, 94, 0.3);
+            border-radius: 8px;
+            color: #22c55e;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            transition: all 0.2s;
+        }
+
+        .mute-button:hover {
+            background: rgba(34, 197, 94, 0.25);
+        }
+
+        .mute-button.muted {
+            background: rgba(239, 68, 68, 0.15);
+            border-color: rgba(239, 68, 68, 0.3);
+            color: #ef4444;
+        }
+
+        .mute-button.muted:hover {
+            background: rgba(239, 68, 68, 0.25);
+        }
     </style>
 </head>
 <body>
@@ -106,6 +183,23 @@
     <div id="statusText" class="call-status">Waiting...</div>
     <div id="callerNumber" class="call-number">---</div>
     <div id="callerSub" class="call-sub">Waiting for incoming call</div>
+
+    <div id="audioSettings" class="audio-settings hidden">
+        <div class="setting-row">
+            <label for="micSelect">Microphone:</label>
+            <select id="micSelect" class="device-select"></select>
+        </div>
+        <div class="setting-row">
+            <label for="speakerSelect">Speaker:</label>
+            <select id="speakerSelect" class="device-select"></select>
+        </div>
+        <div class="setting-row">
+            <button id="btnMute" class="mute-button">
+                <span id="muteIcon">🎤</span>
+                <span id="muteText">Mute</span>
+            </button>
+        </div>
+    </div>
 
     <div id="transcriptContainer" class="transcript-box hidden">
         <div id="speakingIndicator" class="speaking-indicator hidden">
@@ -131,6 +225,10 @@
     let mediaStream;
     let nextStartTime = 0;
     let isCallActive = false;
+    let isMuted = false;
+    let selectedMicId = null;
+    let selectedSpeakerId = null;
+    let audioDestination = null;
 
     // UI Elements
     const connectContainer = document.getElementById('connectContainer');
@@ -142,17 +240,107 @@
     const btnWaiting = document.getElementById('btnWaiting');
     const btnAnswer = document.getElementById('btnAnswer');
     const btnEnd = document.getElementById('btnEnd');
+    const micSelect = document.getElementById('micSelect');
+    const speakerSelect = document.getElementById('speakerSelect');
+    const btnMute = document.getElementById('btnMute');
+    const muteIcon = document.getElementById('muteIcon');
+    const muteText = document.getElementById('muteText');
+    const audioSettings = document.getElementById('audioSettings');
 
     btnConnect.addEventListener('click', initWebSocket);
+
+    // Enumerate and populate audio devices
+    async function loadAudioDevices() {
+        try {
+            const devices = await navigator.mediaDevices.enumerateDevices();
+
+            // Clear existing options
+            micSelect.innerHTML = '';
+            speakerSelect.innerHTML = '';
+
+            // Populate microphones
+            const audioInputs = devices.filter(d => d.kind === 'audioinput');
+            audioInputs.forEach((device, index) => {
+                const option = document.createElement('option');
+                option.value = device.deviceId;
+                option.text = device.label || `Microphone ${index + 1}`;
+                micSelect.appendChild(option);
+
+                if (index === 0) selectedMicId = device.deviceId;
+            });
+
+            // Populate speakers
+            const audioOutputs = devices.filter(d => d.kind === 'audiooutput');
+            audioOutputs.forEach((device, index) => {
+                const option = document.createElement('option');
+                option.value = device.deviceId;
+                option.text = device.label || `Speaker ${index + 1}`;
+                speakerSelect.appendChild(option);
+
+                if (index === 0) selectedSpeakerId = device.deviceId;
+            });
+
+            // Set selected values
+            if (selectedMicId) micSelect.value = selectedMicId;
+            if (selectedSpeakerId) speakerSelect.value = selectedSpeakerId;
+
+        } catch (err) {
+            console.error('Error enumerating devices:', err);
+        }
+    }
+
+    // Handle microphone change
+    micSelect.addEventListener('change', async (e) => {
+        selectedMicId = e.target.value;
+        if (isCallActive) {
+            // Restart audio system with new microphone
+            await restartMicrophone();
+        }
+    });
+
+    // Handle speaker change
+    speakerSelect.addEventListener('change', async (e) => {
+        selectedSpeakerId = e.target.value;
+        if (audioContext && audioDestination) {
+            try {
+                await audioDestination.setSinkId(selectedSpeakerId);
+                console.log('Speaker changed to:', selectedSpeakerId);
+            } catch (err) {
+                console.error('Error changing speaker:', err);
+            }
+        }
+    });
+
+    // Handle mute/unmute
+    btnMute.addEventListener('click', () => {
+        isMuted = !isMuted;
+
+        if (isMuted) {
+            btnMute.classList.add('muted');
+            muteIcon.textContent = '🔇';
+            muteText.textContent = 'Unmute';
+        } else {
+            btnMute.classList.remove('muted');
+            muteIcon.textContent = '🎤';
+            muteText.textContent = 'Mute';
+        }
+
+        // The actual muting happens in the audio processing loop
+        console.log('Microphone', isMuted ? 'muted' : 'unmuted');
+    });
 
     function initWebSocket() {
         ws = new WebSocket(WS_URL);
 
-        ws.onopen = () => {
+        ws.onopen = async () => {
             console.log('Connected to server');
             connectContainer.classList.add('hidden');
             operatorContainer.classList.remove('hidden');
             statusText.innerText = "Online";
+
+            // Load and show audio devices
+            await loadAudioDevices();
+            audioSettings.classList.remove('hidden');
         };
 
         ws.onmessage = (event) => {
@@ -195,12 +383,24 @@
         btnEnd.classList.add('hidden');
         isCallActive = false;
 
+        // Reset mute state
+        if (isMuted) {
+            isMuted = false;
+            btnMute.classList.remove('muted');
+            muteIcon.textContent = '🎤';
+            muteText.textContent = 'Mute';
+        }
+
         // Скрыть и очистить транскрипты
         document.getElementById('transcriptContainer').classList.add('hidden');
         document.getElementById('transcriptScroll').innerHTML = '';
         document.getElementById('speakingIndicator').classList.add('hidden');
 
         // Закрываем микрофон, если был открыт
+        if (mediaStream) {
+            mediaStream.getTracks().forEach(track => track.stop());
+            mediaStream = null;
+        }
         if (audioContext) audioContext.close();
         audioContext = null;
     }
@@ -292,23 +492,112 @@
 
         nextStartTime = audioContext.currentTime;
 
-        mediaStream = await navigator.mediaDevices.getUserMedia({
-            audio: { channelCount: 1, sampleRate: SAMPLE_RATE, echoCancellation: true, noiseSuppression: true }
-        });
+        // Use selected microphone
+        const constraints = {
+            audio: {
+                deviceId: selectedMicId ? { exact: selectedMicId } : undefined,
+                channelCount: 1,
+                sampleRate: SAMPLE_RATE,
+                echoCancellation: true,
+                noiseSuppression: true
+            }
+        };
+
+        mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
 
         const source = audioContext.createMediaStreamSource(mediaStream);
         scriptProcessor = audioContext.createScriptProcessor(2048, 1, 1);
+
+        // Create audio destination for speaker output
+        audioDestination = audioContext.destination;
+        if (selectedSpeakerId && audioDestination.setSinkId) {
+            try {
+                await audioDestination.setSinkId(selectedSpeakerId);
+                console.log('Audio output set to:', selectedSpeakerId);
+            } catch (err) {
+                console.error('Error setting audio output:', err);
+            }
+        }
 
         source.connect(scriptProcessor);
         scriptProcessor.connect(audioContext.destination);
 
         scriptProcessor.onaudioprocess = (e) => {
             if (!isCallActive || ws.readyState !== WebSocket.OPEN) return;
+
             const inputData = e.inputBuffer.getChannelData(0);
-            const pcm16 = floatTo16BitPCM(inputData);
-            const base64Audio = arrayBufferToBase64(pcm16);
-            ws.send(JSON.stringify({ type: 'audio', payload: base64Audio }));
+
+            // If muted, send silence
+            if (isMuted) {
+                const silentData = new Float32Array(inputData.length);
+                const pcm16 = floatTo16BitPCM(silentData);
+                const base64Audio = arrayBufferToBase64(pcm16);
+                ws.send(JSON.stringify({ type: 'audio', payload: base64Audio }));
+            } else {
+                const pcm16 = floatTo16BitPCM(inputData);
+                const base64Audio = arrayBufferToBase64(pcm16);
+                ws.send(JSON.stringify({ type: 'audio', payload: base64Audio }));
+            }
         };
+    }
+
+    // Restart microphone with new device
+    async function restartMicrophone() {
+        if (!isCallActive) return;
+
+        try {
+            // Stop current media stream
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => track.stop());
+            }
+
+            // Disconnect script processor
+            if (scriptProcessor) {
+                scriptProcessor.disconnect();
+            }
+
+            // Get new media stream with selected microphone
+            const constraints = {
+                audio: {
+                    deviceId: selectedMicId ? { exact: selectedMicId } : undefined,
+                    channelCount: 1,
+                    sampleRate: SAMPLE_RATE,
+                    echoCancellation: true,
+                    noiseSuppression: true
+                }
+            };
+
+            mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+
+            const source = audioContext.createMediaStreamSource(mediaStream);
+            scriptProcessor = audioContext.createScriptProcessor(2048, 1, 1);
+
+            source.connect(scriptProcessor);
+            scriptProcessor.connect(audioContext.destination);
+
+            scriptProcessor.onaudioprocess = (e) => {
+                if (!isCallActive || ws.readyState !== WebSocket.OPEN) return;
+
+                const inputData = e.inputBuffer.getChannelData(0);
+
+                // If muted, send silence
+                if (isMuted) {
+                    const silentData = new Float32Array(inputData.length);
+                    const pcm16 = floatTo16BitPCM(silentData);
+                    const base64Audio = arrayBufferToBase64(pcm16);
+                    ws.send(JSON.stringify({ type: 'audio', payload: base64Audio }));
+                } else {
+                    const pcm16 = floatTo16BitPCM(inputData);
+                    const base64Audio = arrayBufferToBase64(pcm16);
+                    ws.send(JSON.stringify({ type: 'audio', payload: base64Audio }));
+                }
+            };
+
+            console.log('Microphone restarted with device:', selectedMicId);
+        } catch (err) {
+            console.error('Error restarting microphone:', err);
+            alert('Failed to switch microphone. Please try again.');
+        }
     }
 
     function playAudioChunk(base64String) {
