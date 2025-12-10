@@ -156,7 +156,7 @@ OUTPUT: Only the English translation. No meta-commentary.`,
                 input_audio_transcription: {
                     model: 'whisper-1'
                 },
-                temperature: 0.5
+                temperature: 0.6
             }
         };
         ai_RuToEn.send(JSON.stringify(config));
@@ -287,7 +287,7 @@ OUTPUT: Only the Russian translation. No meta-commentary.`,
                 input_audio_transcription: {
                     model: 'whisper-1'
                 },
-                temperature: 0.5
+                temperature: 0.6
             }
         };
         ai_EnToRu.send(JSON.stringify(config));
