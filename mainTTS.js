@@ -8,23 +8,29 @@ const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_STANDARD_VOICE_ID;
  * Класс для управления Text-to-Speech через ElevenLabs Realtime API
  */
 class ElevenLabsTTS {
-    constructor() {
+    constructor(outputFormat = 'pcm_16000', targetWs = null, direction = 'RU→EN', streamSid = null) {
         this.ws = null;
         this.isReady = false;
         this.audioQueue = [];
-        this.operatorWs = null;
+        this.targetWs = targetWs;  // WebSocket для отправки аудио (operator или phone)
         this.reconnectAttempts = 0;
         this.maxReconnectAttempts = 3;
+        this.outputFormat = outputFormat;  // 'pcm_16000' или 'ulaw_8000'
+        this.direction = direction;  // 'RU→EN' или 'EN→RU'
+        this.streamSid = streamSid;  // Для SignalWire (phone)
+        this.voiceId = outputFormat === 'ulaw_8000' ? ELEVENLABS_VOICE_ID : ELEVENLABS_VOICE_ID;
     }
 
     /**
      * Подключение к ElevenLabs WebSocket API
-     * @param {WebSocket} operatorWs - WebSocket соединение с оператором
+     * @param {WebSocket} targetWs - WebSocket соединение для отправки аудио
+     * @param {string} streamSid - SignalWire stream ID (опционально, для phone)
      */
-    connect(operatorWs) {
-        this.operatorWs = operatorWs;
+    connect(targetWs = null, streamSid = null) {
+        if (targetWs) this.targetWs = targetWs;
+        if (streamSid) this.streamSid = streamSid;
 
-        const wsUrl = `wss://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}/stream-input?model_id=eleven_turbo_v2_5&output_format=pcm_16000`;
+        const wsUrl = `wss://api.elevenlabs.io/v1/text-to-speech/${this.voiceId}/stream-input?model_id=eleven_turbo_v2_5&output_format=${this.outputFormat}`;
 
         this.ws = new WebSocket(wsUrl, {
             headers: {
@@ -33,7 +39,7 @@ class ElevenLabsTTS {
         });
 
         this.ws.on('open', () => {
-            console.log('[ElevenLabs TTS] ✓ Connected');
+            console.log(`[ElevenLabs TTS ${this.direction}] ✓ Connected`);
 
             // Отправляем начальную конфигурацию
             const config = {
@@ -43,7 +49,7 @@ class ElevenLabsTTS {
                     similarity_boost: 0.75,
                     style: 0.0,
                     use_speaker_boost: true,
-                    speed: 0.75,
+                    speed: 0.65,
                 },
                 generation_config: {
                     chunk_length_schedule: [120, 160, 250, 290]
@@ -51,11 +57,11 @@ class ElevenLabsTTS {
             };
 
             this.ws.send(JSON.stringify(config));
-            console.log('[ElevenLabs TTS] → Sent initial config');
+            console.log(`[ElevenLabs TTS ${this.direction}] → Sent initial config`);
             this.isReady = true;
             this.reconnectAttempts = 0;
 
-            console.log('[ElevenLabs TTS] ✓ Session ready');
+            console.log(`[ElevenLabs TTS ${this.direction}] ✓ Session ready`);
         });
 
         this.ws.on('message', (data) => {
@@ -66,49 +72,60 @@ class ElevenLabsTTS {
                 if (response.audio) {
                     const audioBase64 = response.audio;
                     const audioSize = audioBase64.length;
-                    console.log(`[ElevenLabs TTS] 🔊 Received audio chunk: ${audioSize} bytes`);
+                    console.log(`[ElevenLabs TTS ${this.direction}] 🔊 Received audio chunk: ${audioSize} bytes`);
 
-                    // Отправляем аудио оператору
-                    if (this.operatorWs && this.operatorWs.readyState === WebSocket.OPEN) {
-                        this.operatorWs.send(JSON.stringify({
-                            type: 'audio',
-                            payload: audioBase64
-                        }));
-                        console.log(`[ElevenLabs TTS] → Sent audio chunk to operator`);
+                    // Отправляем аудио в зависимости от направления
+                    if (this.targetWs && this.targetWs.readyState === WebSocket.OPEN) {
+                        if (this.streamSid) {
+                            // Для phone (SignalWire): формат G.711 µ-law
+                            this.targetWs.send(JSON.stringify({
+                                event: 'media',
+                                streamSid: this.streamSid,
+                                media: { payload: audioBase64 }
+                            }));
+                            console.log(`[ElevenLabs TTS ${this.direction}] → Sent audio chunk to phone`);
+                        } else {
+                            // Для operator: обычный формат
+                            this.targetWs.send(JSON.stringify({
+                                type: 'audio',
+                                payload: audioBase64
+                            }));
+                            console.log(`[ElevenLabs TTS ${this.direction}] → Sent audio chunk to operator`);
+                        }
                     } else {
-                        console.error('[ElevenLabs TTS] ❌ Operator WS not ready');
+                        console.error(`[ElevenLabs TTS ${this.direction}] ❌ Target WS not ready`);
                     }
                 }
 
                 // ElevenLabs отправляет isFinal когда генерация завершена
                 if (response.isFinal) {
-                    console.log('[ElevenLabs TTS] ✓ Audio generation completed');
+                    console.log(`[ElevenLabs TTS ${this.direction}] ✓ Audio generation completed`);
                 }
 
                 // Обработка ошибок
                 if (response.error) {
-                    console.error('[ElevenLabs TTS] ❌ Error:', response.error);
+                    console.error(`[ElevenLabs TTS ${this.direction}] ❌ Error:`, response.error);
                 }
 
             } catch (e) {
                 // Если не JSON, возможно это бинарные данные (для некоторых моделей)
-                console.error('[ElevenLabs TTS] ❌ Parse error:', e.message);
+                console.error(`[ElevenLabs TTS ${this.direction}] ❌ Parse error:`, e.message);
             }
         });
 
         this.ws.on('error', (error) => {
-            console.error('[ElevenLabs TTS] ❌ WS Error:', error.message);
+            console.error(`[ElevenLabs TTS ${this.direction}] ❌ WS Error:`, error.message);
         });
 
         this.ws.on('close', () => {
-            console.log('[ElevenLabs TTS] Connection closed');
+            console.log(`[ElevenLabs TTS ${this.direction}] Connection closed`);
             this.isReady = false;
 
             // Попытка переподключения
-            if (this.reconnectAttempts < this.maxReconnectAttempts && this.operatorWs) {
+            if (this.reconnectAttempts < this.maxReconnectAttempts && this.targetWs) {
                 this.reconnectAttempts++;
-                console.log(`[ElevenLabs TTS] Reconnecting (${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
-                setTimeout(() => this.connect(this.operatorWs), 2000);
+                console.log(`[ElevenLabs TTS ${this.direction}] Reconnecting (${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
+                setTimeout(() => this.connect(this.targetWs, this.streamSid), 2000);
             }
         });
     }
@@ -124,7 +141,7 @@ class ElevenLabsTTS {
         }
 
         if (!this.isReady || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
-            console.error('[ElevenLabs TTS] ❌ WebSocket not ready');
+            console.error(`[ElevenLabs TTS ${this.direction}] ❌ WebSocket not ready`);
             return;
         }
 
@@ -136,7 +153,7 @@ class ElevenLabsTTS {
             };
 
             this.ws.send(JSON.stringify(message));
-            console.log(`[ElevenLabs TTS] → Generating audio for: "${text.substring(0, 50)}..."`);
+            console.log(`[ElevenLabs TTS ${this.direction}] → Generating audio for: "${text.substring(0, 50)}..."`);
 
             // Отправляем пустое сообщение для завершения и flush генерации
             setTimeout(() => {
@@ -146,12 +163,12 @@ class ElevenLabsTTS {
                         flush: true
                     };
                     this.ws.send(JSON.stringify(flushMessage));
-                    console.log(`[ElevenLabs TTS] → Flushing audio generation`);
+                    console.log(`[ElevenLabs TTS ${this.direction}] → Flushing audio generation`);
                 }
             }, 100);
 
         } catch (error) {
-            console.error('[ElevenLabs TTS] ❌ Error sending text:', error.message);
+            console.error(`[ElevenLabs TTS ${this.direction}] ❌ Error sending text:`, error.message);
         }
     }
 
@@ -170,49 +187,81 @@ class ElevenLabsTTS {
             this.ws.close();
         }
         this.isReady = false;
-        this.operatorWs = null;
+        this.targetWs = null;
     }
 }
 
-// Глобальный инстанс TTS
-let ttsInstance = null;
+// Глобальные инстансы TTS
+let ttsForOperator = null;  // Для оператора (RU→EN, PCM16)
+let ttsForPhone = null;     // Для абонента (EN→RU, µ-law)
 
 /**
- * Инициализация TTS (вызывается при старте сессии)
+ * Инициализация TTS для оператора (вызывается при старте сессии)
  * @param {WebSocket} operatorWs - WebSocket соединение с оператором
  */
-function initTTS(operatorWs) {
-    if (!ttsInstance) {
-        ttsInstance = new ElevenLabsTTS();
+function initTTSForOperator(operatorWs) {
+    if (!ttsForOperator) {
+        ttsForOperator = new ElevenLabsTTS('pcm_16000', operatorWs, 'RU→EN');
+        ttsForOperator.connect();
     }
-    ttsInstance.connect(operatorWs);
 }
 
 /**
- * Озвучивает текст
+ * Инициализация TTS для абонента (вызывается при старте сессии)
+ * @param {WebSocket} phoneWs - WebSocket соединение с абонентом
+ * @param {string} streamSid - SignalWire stream ID
+ */
+function initTTSForPhone(phoneWs, streamSid) {
+    if (!ttsForPhone) {
+        ttsForPhone = new ElevenLabsTTS('ulaw_8000', phoneWs, 'EN→RU', streamSid);
+        ttsForPhone.connect();
+    }
+}
+
+/**
+ * Озвучивает текст для оператора (RU→EN)
  * @param {string} text - Текст для озвучки
  * @returns {Promise<void>}
  */
-async function playTTS(text) {
-    if (!ttsInstance) {
-        console.error('[ElevenLabs TTS] ❌ TTS not initialized');
+async function playTTSForOperator(text) {
+    if (!ttsForOperator) {
+        console.error('[ElevenLabs TTS RU→EN] ❌ TTS not initialized');
         return;
     }
-    await ttsInstance.playTTS(text);
+    await ttsForOperator.playTTS(text);
 }
 
 /**
- * Закрывает TTS соединение
+ * Озвучивает текст для абонента (EN→RU)
+ * @param {string} text - Текст для озвучки
+ * @returns {Promise<void>}
+ */
+async function playTTSForPhone(text) {
+    if (!ttsForPhone) {
+        console.error('[ElevenLabs TTS EN→RU] ❌ TTS not initialized');
+        return;
+    }
+    await ttsForPhone.playTTS(text);
+}
+
+/**
+ * Закрывает все TTS соединения
  */
 function closeTTS() {
-    if (ttsInstance) {
-        ttsInstance.close();
-        ttsInstance = null;
+    if (ttsForOperator) {
+        ttsForOperator.close();
+        ttsForOperator = null;
+    }
+    if (ttsForPhone) {
+        ttsForPhone.close();
+        ttsForPhone = null;
     }
 }
 
 module.exports = {
-    initTTS,
-    playTTS,
+    initTTSForOperator,
+    initTTSForPhone,
+    playTTSForOperator,
+    playTTSForPhone,
     closeTTS
 };
