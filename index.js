@@ -5,6 +5,7 @@ const url = require('url');
 const fs = require('fs');
 const path = require('path');
 const { createClient } = require('@deepgram/sdk');
+const { translateRuToEn } = require('./translationModule');
 
 const PORT = process.env.PORT || 8080;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -124,13 +125,20 @@ function startTranslationSession(phoneWs, operatorWs) {
             console.log('[DeepGram] ✓ Connected for live transcription');
         });
 
-        deepgramLive.on('Results', (data) => {
+        deepgramLive.on('Results', async (data) => {
             const transcript = data.channel.alternatives[0].transcript;
             if (transcript && transcript.length > 0) {
                 const isFinal = data.is_final;
                 const timestamp = new Date().toISOString().substring(11, 23);
                 const marker = isFinal ? '✓' : '⋯';
                 console.log(`[DeepGram ${timestamp}] ${marker} ${transcript}`);
+
+                // Переводим только финальные результаты
+                if (isFinal) {
+                    const translatedText = await translateRuToEn(transcript);
+                    const translationTimestamp = new Date().toISOString().substring(11, 23);
+                    console.log(`[Translation ${translationTimestamp}] EN: ${translatedText}`);
+                }
             }
         });
 
