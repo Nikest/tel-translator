@@ -126,10 +126,30 @@ function startTranslationSession(phoneWs, operatorWs) {
                 const timestamp = new Date().toISOString().substring(11, 23);
                 console.log(`[DeepGram Phone ${timestamp}] ✓ ${transcript}`);
 
+                // Отправляем транскрипцию оператору (оригинал на русском)
+                if (operatorWs.readyState === WebSocket.OPEN) {
+                    operatorWs.send(JSON.stringify({
+                        type: 'transcript',
+                        speaker: 'client',
+                        text: transcript,
+                        language: 'ru'
+                    }));
+                }
+
                 // Переводим RU→EN
                 const translatedText = await translateRuToEn(transcript);
                 const translationTimestamp = new Date().toISOString().substring(11, 23);
                 console.log(`[Translation ${translationTimestamp}] EN: ${translatedText}`);
+
+                // Отправляем перевод оператору
+                if (operatorWs.readyState === WebSocket.OPEN) {
+                    operatorWs.send(JSON.stringify({
+                        type: 'transcript',
+                        speaker: 'ai_translation',
+                        text: translatedText,
+                        language: 'en'
+                    }));
+                }
 
                 // Озвучиваем переведенный текст и отправляем оператору
                 await playTTSForOperator(translatedText);
@@ -171,10 +191,30 @@ function startTranslationSession(phoneWs, operatorWs) {
                 const timestamp = new Date().toISOString().substring(11, 23);
                 console.log(`[DeepGram Operator ${timestamp}] ✓ ${transcript}`);
 
+                // Отправляем транскрипцию оператору (что он сам сказал на английском)
+                if (operatorWs.readyState === WebSocket.OPEN) {
+                    operatorWs.send(JSON.stringify({
+                        type: 'transcript',
+                        speaker: 'operator',
+                        text: transcript,
+                        language: 'en'
+                    }));
+                }
+
                 // Переводим EN→RU
                 const translatedText = await translateEnToRu(transcript);
                 const translationTimestamp = new Date().toISOString().substring(11, 23);
                 console.log(`[Translation ${translationTimestamp}] RU: ${translatedText}`);
+
+                // Отправляем перевод оператору
+                if (operatorWs.readyState === WebSocket.OPEN) {
+                    operatorWs.send(JSON.stringify({
+                        type: 'transcript',
+                        speaker: 'ai_translation_to_client',
+                        text: translatedText,
+                        language: 'ru'
+                    }));
+                }
 
                 // Озвучиваем переведенный текст и отправляем абоненту
                 await playTTSForPhone(translatedText);
