@@ -46,11 +46,11 @@ class ElevenLabsTTS {
                 },
                 generation_config: {
                     chunk_length_schedule: [120, 160, 250, 290]
-                },
-                xi_api_key: ELEVENLABS_API_KEY
+                }
             };
 
             this.ws.send(JSON.stringify(config));
+            console.log('[ElevenLabs TTS] → Sent initial config');
             this.isReady = true;
             this.reconnectAttempts = 0;
 
@@ -130,12 +130,24 @@ class ElevenLabsTTS {
         try {
             // Отправляем текст для озвучки
             const message = {
-                text: text,
+                text: text + ' ',
                 try_trigger_generation: true
             };
 
             this.ws.send(JSON.stringify(message));
             console.log(`[ElevenLabs TTS] → Generating audio for: "${text.substring(0, 50)}..."`);
+
+            // Отправляем пустое сообщение для завершения и flush генерации
+            setTimeout(() => {
+                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    const flushMessage = {
+                        text: '',
+                        flush: true
+                    };
+                    this.ws.send(JSON.stringify(flushMessage));
+                    console.log(`[ElevenLabs TTS] → Flushing audio generation`);
+                }
+            }, 100);
 
         } catch (error) {
             console.error('[ElevenLabs TTS] ❌ Error sending text:', error.message);
