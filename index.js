@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const { createClient } = require('@deepgram/sdk');
 const { translateRuToEn, initTranslators, closeTranslators } = require('./translationModule');
+const { initTTS, playTTS, closeTTS } = require('./mainTTS');
 
 const PORT = process.env.PORT || 8080;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -107,6 +108,9 @@ function startTranslationSession(phoneWs, operatorWs) {
     // --- Инициализация Realtime переводчиков ---
     initTranslators();
 
+    // --- Инициализация TTS ---
+    initTTS(operatorWs);
+
     // --- DeepGram Transcription (для тестирования скорости) ---
     const deepgram = createClient(DEEPGRAM_API_KEY);
     let deepgramLive = null;
@@ -134,13 +138,16 @@ function startTranslationSession(phoneWs, operatorWs) {
                 const isFinal = data.is_final;
                 const timestamp = new Date().toISOString().substring(11, 23);
                 const marker = isFinal ? '✓' : '⋯';
-                console.log(`[DeepGram ${timestamp}] ${marker} ${transcript}`);
 
-                // Переводим только финальные результаты
                 if (isFinal) {
+                    console.log(`[DeepGram ${timestamp}] ${marker} ${transcript}`);
+
                     const translatedText = await translateRuToEn(transcript);
                     const translationTimestamp = new Date().toISOString().substring(11, 23);
                     console.log(`[Translation ${translationTimestamp}] EN: ${translatedText}`);
+
+                    // Озвучиваем переведенный текст и отправляем оператору
+                    await playTTS(translatedText);
                 }
             }
         });
@@ -532,6 +539,9 @@ OUTPUT: Only the Russian translation. No meta-commentary.`,
 
         // Закрываем Realtime переводчики
         closeTranslators();
+
+        // Закрываем TTS
+        closeTTS();
 
         // Возвращаем оператора в режим ожидания (не закрываем его соединение!)
         if (operatorWs.readyState === WebSocket.OPEN) {

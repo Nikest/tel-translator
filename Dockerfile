@@ -7,6 +7,7 @@ RUN npm install --production
 COPY index.js ./
 COPY index.html ./
 COPY translationModule.js ./
+COPY mainTTS.js ./
 
 EXPOSE 8080
 CMD ["node", "index.js"]
