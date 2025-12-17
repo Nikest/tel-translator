@@ -24,7 +24,7 @@ class ElevenLabsTTS {
     connect(operatorWs) {
         this.operatorWs = operatorWs;
 
-        const wsUrl = `wss://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}/stream-input?model_id=eleven_turbo_v2_5&output_format=pcm_16000`;
+        const wsUrl = `wss://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}/stream-input?model_id=eleven_turbo_v2_5&output_format=pcm_24000`;
 
         this.ws = new WebSocket(wsUrl, {
             headers: {
