@@ -24,7 +24,7 @@ class ElevenLabsTTS {
     connect(operatorWs) {
         this.operatorWs = operatorWs;
 
-        const wsUrl = `wss://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}/stream-input?model_id=eleven_turbo_v2_5`;
+        const wsUrl = `wss://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}/stream-input?model_id=eleven_turbo_v2_5&output_format=pcm_16000`;
 
         this.ws = new WebSocket(wsUrl, {
             headers: {
@@ -64,6 +64,8 @@ class ElevenLabsTTS {
                 // Обработка аудио chunks
                 if (response.audio) {
                     const audioBase64 = response.audio;
+                    const audioSize = audioBase64.length;
+                    console.log(`[ElevenLabs TTS] 🔊 Received audio chunk: ${audioSize} bytes`);
 
                     // Отправляем аудио оператору
                     if (this.operatorWs && this.operatorWs.readyState === WebSocket.OPEN) {
@@ -71,6 +73,9 @@ class ElevenLabsTTS {
                             type: 'audio',
                             payload: audioBase64
                         }));
+                        console.log(`[ElevenLabs TTS] → Sent audio chunk to operator`);
+                    } else {
+                        console.error('[ElevenLabs TTS] ❌ Operator WS not ready');
                     }
                 }
 
@@ -86,7 +91,7 @@ class ElevenLabsTTS {
 
             } catch (e) {
                 // Если не JSON, возможно это бинарные данные (для некоторых моделей)
-                // В данном случае ElevenLabs отправляет JSON с base64
+                console.error('[ElevenLabs TTS] ❌ Parse error:', e.message);
             }
         });
 
