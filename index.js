@@ -4,9 +4,11 @@ const http = require('http');
 const url = require('url');
 const fs = require('fs');
 const path = require('path');
+const { createClient } = require('@deepgram/sdk');
 
 const PORT = process.env.PORT || 8080;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY;
 const OPENAI_MODEL = 'gpt-4o-realtime-preview-2024-12-17';
 
 let waitingOperator = null;
@@ -100,6 +102,49 @@ function startTranslationSession(phoneWs, operatorWs) {
     // Состояние для EN→RU
     let enToRuReady = false;
     let enToRuQueue = [];
+
+    // --- DeepGram Transcription (для тестирования скорости) ---
+    const deepgram = createClient(DEEPGRAM_API_KEY);
+    let deepgramLive = null;
+
+    // Инициализация DeepGram Live Transcription
+    try {
+        deepgramLive = deepgram.listen.live({
+            model: 'nova-2',
+            language: 'ru',
+            encoding: 'mulaw',
+            sample_rate: 8000,
+            channels: 1,
+            smart_format: true,
+            punctuate: true,
+            interim_results: true
+        });
+
+        deepgramLive.on('open', () => {
+            console.log('[DeepGram] ✓ Connected for live transcription');
+        });
+
+        deepgramLive.on('Results', (data) => {
+            const transcript = data.channel.alternatives[0].transcript;
+            if (transcript && transcript.length > 0) {
+                const isFinal = data.is_final;
+                const timestamp = new Date().toISOString().substring(11, 23);
+                const marker = isFinal ? '✓' : '⋯';
+                console.log(`[DeepGram ${timestamp}] ${marker} ${transcript}`);
+            }
+        });
+
+        deepgramLive.on('error', (error) => {
+            console.error('[DeepGram] ❌ Error:', error);
+        });
+
+        deepgramLive.on('close', () => {
+            console.log('[DeepGram] Connection closed');
+        });
+
+    } catch (error) {
+        console.error('[DeepGram] ❌ Failed to initialize:', error.message);
+    }
 
     // --- OpenAI: Russian → English (для оператора) ---
     const ai_RuToEn = new WebSocket(`wss://api.openai.com/v1/realtime?model=${OPENAI_MODEL}`, {
@@ -201,7 +246,6 @@ OUTPUT: Only the English translation. No meta-commentary.`,
             }
 
             if (response.type === 'conversation.item.input_audio_transcription.completed') {
-                console.log(`[Phone] 📝 "${response.transcript}"`);
                 if (operatorWs.readyState === WebSocket.OPEN) {
                     operatorWs.send(JSON.stringify({
                         type: 'transcript',
@@ -223,7 +267,6 @@ OUTPUT: Only the English translation. No meta-commentary.`,
             }
 
             if (response.type === 'response.audio_transcript.done') {
-                console.log(`[AI→Operator] 🔊 "${response.transcript}"`);
                 if (operatorWs.readyState === WebSocket.OPEN) {
                     operatorWs.send(JSON.stringify({
                         type: 'transcript',
@@ -384,7 +427,7 @@ OUTPUT: Only the Russian translation. No meta-commentary.`,
     // Маршрутизация аудио
     // =====================
 
-    // От телефона → OpenAI RU→EN
+    // От телефона → OpenAI RU→EN + DeepGram
     phoneWs.on('message', (message) => {
         try {
             const msg = JSON.parse(message);
@@ -400,11 +443,23 @@ OUTPUT: Only the Russian translation. No meta-commentary.`,
                     audio: msg.media.payload
                 };
 
+                // Отправка в OpenAI для перевода
                 if (ai_RuToEn.readyState === WebSocket.OPEN) {
                     if (ruToEnReady) {
                         ai_RuToEn.send(JSON.stringify(audioData));
                     } else {
                         ruToEnQueue.push(audioData);
+                    }
+                }
+
+                // Отправка в DeepGram для транскрипции (тестирование)
+                if (deepgramLive && msg.media.payload) {
+                    try {
+                        // Декодируем base64 аудио и отправляем в DeepGram
+                        const audioBuffer = Buffer.from(msg.media.payload, 'base64');
+                        deepgramLive.send(audioBuffer);
+                    } catch (e) {
+                        console.error('[DeepGram] ❌ Failed to send audio:', e.message);
                     }
                 }
             }
@@ -453,6 +508,16 @@ OUTPUT: Only the Russian translation. No meta-commentary.`,
         if (ai_RuToEn.readyState === WebSocket.OPEN) ai_RuToEn.close();
         if (ai_EnToRu.readyState === WebSocket.OPEN) ai_EnToRu.close();
         if (phoneWs.readyState === WebSocket.OPEN) phoneWs.close();
+
+        // Закрываем DeepGram соединение
+        if (deepgramLive) {
+            try {
+                deepgramLive.finish();
+                console.log('[DeepGram] ✓ Connection closed');
+            } catch (e) {
+                console.error('[DeepGram] ❌ Error closing:', e.message);
+            }
+        }
 
         // Возвращаем оператора в режим ожидания (не закрываем его соединение!)
         if (operatorWs.readyState === WebSocket.OPEN) {
