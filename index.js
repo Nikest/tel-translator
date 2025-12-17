@@ -5,7 +5,7 @@ const url = require('url');
 const fs = require('fs');
 const path = require('path');
 const { createClient } = require('@deepgram/sdk');
-const { translateRuToEn } = require('./translationModule');
+const { translateRuToEn, initTranslators, closeTranslators } = require('./translationModule');
 
 const PORT = process.env.PORT || 8080;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -103,6 +103,9 @@ function startTranslationSession(phoneWs, operatorWs) {
     // Состояние для EN→RU
     let enToRuReady = false;
     let enToRuQueue = [];
+
+    // --- Инициализация Realtime переводчиков ---
+    initTranslators();
 
     // --- DeepGram Transcription (для тестирования скорости) ---
     const deepgram = createClient(DEEPGRAM_API_KEY);
@@ -526,6 +529,9 @@ OUTPUT: Only the Russian translation. No meta-commentary.`,
                 console.error('[DeepGram] ❌ Error closing:', e.message);
             }
         }
+
+        // Закрываем Realtime переводчики
+        closeTranslators();
 
         // Возвращаем оператора в режим ожидания (не закрываем его соединение!)
         if (operatorWs.readyState === WebSocket.OPEN) {
