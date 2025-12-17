@@ -44,7 +44,7 @@ class RealtimeTranslator {
                 session: {
                     modalities: ['text'],
                     instructions: instruction,
-                    temperature: 0.3,
+                    temperature: 0.6,
                     max_response_output_tokens: 500
                 }
             };
