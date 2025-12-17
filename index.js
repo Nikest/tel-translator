@@ -274,15 +274,16 @@ OUTPUT: Only the English translation. No meta-commentary.`,
                 }
             }
 
-            if (response.type === 'response.audio.delta' && response.delta) {
-                // Отправляем PCM16 аудио оператору
-                if (operatorWs.readyState === WebSocket.OPEN) {
-                    operatorWs.send(JSON.stringify({
-                        type: 'audio',
-                        payload: response.delta
-                    }));
-                }
-            }
+            // ОТКЛЮЧЕНО: Теперь оператор слышит только озвучку от ElevenLabs
+            // if (response.type === 'response.audio.delta' && response.delta) {
+            //     // Отправляем PCM16 аудио оператору
+            //     if (operatorWs.readyState === WebSocket.OPEN) {
+            //         operatorWs.send(JSON.stringify({
+            //             type: 'audio',
+            //             payload: response.delta
+            //         }));
+            //     }
+            // }
 
             if (response.type === 'response.audio_transcript.done') {
                 if (operatorWs.readyState === WebSocket.OPEN) {
