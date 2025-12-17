@@ -49,7 +49,7 @@ class ElevenLabsTTS {
                     similarity_boost: 0.75,
                     style: 0.0,
                     use_speaker_boost: true,
-                    speed: 0.65,
+                    speed: 0.75,
                 },
                 generation_config: {
                     chunk_length_schedule: [120, 160, 250, 290]
