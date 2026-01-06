@@ -4,12 +4,11 @@ const http = require('http');
 const url = require('url');
 const fs = require('fs');
 const path = require('path');
-const { createClient } = require('@deepgram/sdk');
-const { translateRuToEn, translateEnToRu, initTranslators, closeTranslators } = require('./translationModule');
 const { initTTSForOperator, initTTSForPhone, playTTSForOperator, playTTSForPhone, closeTTS } = require('./mainTTS');
 
 const PORT = process.env.PORT || 8080;
-const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY;
+const SONIOX_API_KEY = process.env.SONIOX_API_KEY;
+const SONIOX_WS_URL = 'wss://stt-rt.soniox.com/transcribe-websocket';
 
 let waitingOperator = null;
 
@@ -91,149 +90,170 @@ wss.on('connection', (ws) => {
     startTranslationSession(ws, operatorWs);
 });
 
+// --- Soniox WebSocket Connection ---
+function createSonioxConnection(config, onTranslation, onError) {
+    const ws = new WebSocket(SONIOX_WS_URL);
+    let translationBuffer = '';
+    let isConfigured = false;
+
+    ws.on('open', () => {
+        console.log(`[Soniox ${config.name}] ✓ Connected`);
+
+        // Отправляем конфигурацию
+        const configMessage = {
+            api_key: SONIOX_API_KEY,
+            model: 'stt-rt-preview',
+            audio_format: config.audioFormat,
+            sample_rate: config.sampleRate,
+            num_channels: 1,
+            language_hints: [config.sourceLanguage],
+            language_hints_strict: true,
+            enable_endpoint_detection: true,
+            translation: {
+                type: 'one_way',
+                target_language: config.targetLanguage
+            }
+        };
+
+        ws.send(JSON.stringify(configMessage));
+        isConfigured = true;
+        console.log(`[Soniox ${config.name}] ✓ Configured: ${config.sourceLanguage} → ${config.targetLanguage}`);
+    });
+
+    ws.on('message', (data) => {
+        try {
+            const response = JSON.parse(data.toString());
+
+            if (response.error_code) {
+                console.error(`[Soniox ${config.name}] ❌ Error ${response.error_code}: ${response.error_message}`);
+                onError(response.error_message);
+                return;
+            }
+
+            if (response.finished) {
+                console.log(`[Soniox ${config.name}] Stream finished`);
+                return;
+            }
+
+            if (response.tokens && response.tokens.length > 0) {
+                let hasEndpoint = false;
+
+                for (const token of response.tokens) {
+                    // Собираем только переведённые токены
+                    if (token.translation_status === 'translation' && token.is_final) {
+                        translationBuffer += token.text;
+                    }
+
+                    // Проверяем endpoint (конец фразы)
+                    if (token.endpoint_id !== undefined) {
+                        hasEndpoint = true;
+                    }
+                }
+
+                // Если есть endpoint или накопилось достаточно текста — отправляем на TTS
+                if (hasEndpoint && translationBuffer.trim().length > 0) {
+                    const translation = translationBuffer.trim();
+                    translationBuffer = '';
+
+                    const timestamp = new Date().toISOString().substring(11, 23);
+                    console.log(`[Soniox ${config.name} ${timestamp}] Translation: ${translation}`);
+
+                    onTranslation(translation);
+                }
+            }
+        } catch (e) {
+            console.error(`[Soniox ${config.name}] ❌ Parse error:`, e.message);
+        }
+    });
+
+    ws.on('error', (error) => {
+        console.error(`[Soniox ${config.name}] ❌ WebSocket error:`, error.message);
+        onError(error.message);
+    });
+
+    ws.on('close', () => {
+        console.log(`[Soniox ${config.name}] Connection closed`);
+    });
+
+    return {
+        send: (audioBuffer) => {
+            if (ws.readyState === WebSocket.OPEN && isConfigured) {
+                ws.send(audioBuffer);
+            }
+        },
+        close: () => {
+            if (ws.readyState === WebSocket.OPEN) {
+                // Отправляем пустой фрейм для graceful close
+                ws.send(Buffer.alloc(0));
+            }
+        },
+        isOpen: () => ws.readyState === WebSocket.OPEN
+    };
+}
+
 // --- Translation Session ---
 function startTranslationSession(phoneWs, operatorWs) {
     let streamSid = null;
+    let sonioxPhone = null;
+    let sonioxOperator = null;
 
-    // --- Инициализация Realtime переводчиков ---
-    initTranslators();
-
-    // --- DeepGram Transcription для абонента (RU) ---
-    const deepgram = createClient(DEEPGRAM_API_KEY);
-    let deepgramPhone = null;
-    let deepgramOperator = null;
-
-    // Инициализация DeepGram для Phone (русский)
-    try {
-        deepgramPhone = deepgram.listen.live({
-            model: 'nova-2',
-            language: 'ru',
-            encoding: 'mulaw',
-            sample_rate: 8000,
-            channels: 1,
-            smart_format: true,
-            punctuate: true,
-            interim_results: false  // Только финальные результаты
-        });
-
-        deepgramPhone.on('open', () => {
-            console.log('[DeepGram Phone RU] ✓ Connected for live transcription');
-        });
-
-        deepgramPhone.on('Results', async (data) => {
-            const transcript = data.channel.alternatives[0].transcript;
-            if (transcript && transcript.length > 0 && data.is_final) {
-                const timestamp = new Date().toISOString().substring(11, 23);
-                console.log(`[DeepGram Phone ${timestamp}] ✓ ${transcript}`);
-
-                // Отправляем транскрипцию оператору (оригинал на русском)
-                if (operatorWs.readyState === WebSocket.OPEN) {
-                    operatorWs.send(JSON.stringify({
-                        type: 'transcript',
-                        speaker: 'client',
-                        text: transcript,
-                        language: 'ru'
-                    }));
-                }
-
-                // Переводим RU→EN
-                const translatedText = await translateRuToEn(transcript);
-                const translationTimestamp = new Date().toISOString().substring(11, 23);
-                console.log(`[Translation ${translationTimestamp}] EN: ${translatedText}`);
-
-                // Отправляем перевод оператору
-                if (operatorWs.readyState === WebSocket.OPEN) {
-                    operatorWs.send(JSON.stringify({
-                        type: 'transcript',
-                        speaker: 'ai_translation',
-                        text: translatedText,
-                        language: 'en'
-                    }));
-                }
-
-                // Озвучиваем переведенный текст и отправляем оператору
-                await playTTSForOperator(translatedText);
+    // --- Soniox для Phone (RU → EN) ---
+    sonioxPhone = createSonioxConnection(
+        {
+            name: 'Phone RU→EN',
+            audioFormat: 'mulaw',
+            sampleRate: 8000,
+            sourceLanguage: 'ru',
+            targetLanguage: 'en'
+        },
+        async (translatedText) => {
+            // Отправляем перевод оператору (текст)
+            if (operatorWs.readyState === WebSocket.OPEN) {
+                operatorWs.send(JSON.stringify({
+                    type: 'transcript',
+                    speaker: 'client',
+                    text: translatedText,
+                    language: 'en'
+                }));
             }
-        });
 
-        deepgramPhone.on('error', (error) => {
-            console.error('[DeepGram Phone] ❌ Error:', error);
-        });
+            // Озвучиваем для оператора
+            await playTTSForOperator(translatedText);
+        },
+        (error) => {
+            console.error('[Phone Translation] Error:', error);
+        }
+    );
 
-        deepgramPhone.on('close', () => {
-            console.log('[DeepGram Phone] Connection closed');
-        });
-
-    } catch (error) {
-        console.error('[DeepGram Phone] ❌ Failed to initialize:', error.message);
-    }
-
-    // Инициализация DeepGram для Operator (английский)
-    try {
-        deepgramOperator = deepgram.listen.live({
-            model: 'nova-2',
-            language: 'en',
-            encoding: 'linear16',
-            sample_rate: 24000,
-            channels: 1,
-            smart_format: true,
-            punctuate: true,
-            interim_results: false  // Только финальные результаты
-        });
-
-        deepgramOperator.on('open', () => {
-            console.log('[DeepGram Operator EN] ✓ Connected for live transcription');
-        });
-
-        deepgramOperator.on('Results', async (data) => {
-            const transcript = data.channel.alternatives[0].transcript;
-            if (transcript && transcript.length > 0 && data.is_final) {
-                const timestamp = new Date().toISOString().substring(11, 23);
-                console.log(`[DeepGram Operator ${timestamp}] ✓ ${transcript}`);
-
-                // Отправляем транскрипцию оператору (что он сам сказал на английском)
-                if (operatorWs.readyState === WebSocket.OPEN) {
-                    operatorWs.send(JSON.stringify({
-                        type: 'transcript',
-                        speaker: 'operator',
-                        text: transcript,
-                        language: 'en'
-                    }));
-                }
-
-                // Переводим EN→RU
-                const translatedText = await translateEnToRu(transcript);
-                const translationTimestamp = new Date().toISOString().substring(11, 23);
-                console.log(`[Translation ${translationTimestamp}] RU: ${translatedText}`);
-
-                // Отправляем перевод оператору
-                if (operatorWs.readyState === WebSocket.OPEN) {
-                    operatorWs.send(JSON.stringify({
-                        type: 'transcript',
-                        speaker: 'ai_translation_to_client',
-                        text: translatedText,
-                        language: 'ru'
-                    }));
-                }
-
-                // Озвучиваем переведенный текст и отправляем абоненту
-                await playTTSForPhone(translatedText);
+    // --- Soniox для Operator (EN → RU) ---
+    sonioxOperator = createSonioxConnection(
+        {
+            name: 'Operator EN→RU',
+            audioFormat: 'pcm_s16le',
+            sampleRate: 24000,
+            sourceLanguage: 'en',
+            targetLanguage: 'ru'
+        },
+        async (translatedText) => {
+            // Отправляем перевод оператору (что будет сказано абоненту)
+            if (operatorWs.readyState === WebSocket.OPEN) {
+                operatorWs.send(JSON.stringify({
+                    type: 'transcript',
+                    speaker: 'operator_translated',
+                    text: translatedText,
+                    language: 'ru'
+                }));
             }
-        });
 
-        deepgramOperator.on('error', (error) => {
-            console.error('[DeepGram Operator] ❌ Error:', error);
-        });
+            // Озвучиваем для абонента
+            await playTTSForPhone(translatedText);
+        },
+        (error) => {
+            console.error('[Operator Translation] Error:', error);
+        }
+    );
 
-        deepgramOperator.on('close', () => {
-            console.log('[DeepGram Operator] Connection closed');
-        });
-
-    } catch (error) {
-        console.error('[DeepGram Operator] ❌ Failed to initialize:', error.message);
-    }
-
-    // --- Инициализация TTS после получения streamSid ---
+    // --- Обработка сообщений от Phone (SignalWire) ---
     phoneWs.on('message', (message) => {
         try {
             const msg = JSON.parse(message);
@@ -246,13 +266,13 @@ function startTranslationSession(phoneWs, operatorWs) {
                 initTTSForPhone(phoneWs, streamSid);
             }
 
-            if (msg.event === 'media' && deepgramPhone) {
+            if (msg.event === 'media' && sonioxPhone) {
                 try {
-                    // Декодируем base64 аудио и отправляем в DeepGram
+                    // Декодируем base64 mulaw аудио и отправляем в Soniox
                     const audioBuffer = Buffer.from(msg.media.payload, 'base64');
-                    deepgramPhone.send(audioBuffer);
+                    sonioxPhone.send(audioBuffer);
                 } catch (e) {
-                    console.error('[DeepGram Phone] ❌ Failed to send audio:', e.message);
+                    console.error('[Soniox Phone] ❌ Failed to send audio:', e.message);
                 }
             }
 
@@ -269,18 +289,18 @@ function startTranslationSession(phoneWs, operatorWs) {
     // Инициализируем TTS для оператора
     initTTSForOperator(operatorWs);
 
-    // От оператора → DeepGram
+    // --- Обработка сообщений от Operator ---
     operatorWs.on('message', (message) => {
         try {
             const msg = JSON.parse(message);
 
-            if (msg.type === 'audio' && deepgramOperator) {
+            if (msg.type === 'audio' && sonioxOperator) {
                 try {
-                    // Декодируем base64 PCM16 и отправляем в DeepGram
+                    // Декодируем base64 PCM16 и отправляем в Soniox
                     const audioBuffer = Buffer.from(msg.payload, 'base64');
-                    deepgramOperator.send(audioBuffer);
+                    sonioxOperator.send(audioBuffer);
                 } catch (e) {
-                    console.error('[DeepGram Operator] ❌ Failed to send audio:', e.message);
+                    console.error('[Soniox Operator] ❌ Failed to send audio:', e.message);
                 }
             }
 
@@ -297,32 +317,21 @@ function startTranslationSession(phoneWs, operatorWs) {
 
         if (phoneWs.readyState === WebSocket.OPEN) phoneWs.close();
 
-        // Закрываем DeepGram соединения
-        if (deepgramPhone) {
-            try {
-                deepgramPhone.finish();
-                console.log('[DeepGram Phone] ✓ Connection closed');
-            } catch (e) {
-                console.error('[DeepGram Phone] ❌ Error closing:', e.message);
-            }
+        // Закрываем Soniox соединения
+        if (sonioxPhone) {
+            sonioxPhone.close();
+            console.log('[Soniox Phone] ✓ Connection closed');
         }
 
-        if (deepgramOperator) {
-            try {
-                deepgramOperator.finish();
-                console.log('[DeepGram Operator] ✓ Connection closed');
-            } catch (e) {
-                console.error('[DeepGram Operator] ❌ Error closing:', e.message);
-            }
+        if (sonioxOperator) {
+            sonioxOperator.close();
+            console.log('[Soniox Operator] ✓ Connection closed');
         }
-
-        // Закрываем Realtime переводчики
-        closeTranslators();
 
         // Закрываем TTS
         closeTTS();
 
-        // Возвращаем оператора в режим ожидания (не закрываем его соединение!)
+        // Возвращаем оператора в режим ожидания
         if (operatorWs.readyState === WebSocket.OPEN) {
             operatorWs.send(JSON.stringify({ type: 'status', msg: 'Waiting for a call...' }));
             waitingOperator = operatorWs;
@@ -338,10 +347,9 @@ function startTranslationSession(phoneWs, operatorWs) {
 
     operatorWs.on('close', () => {
         console.log('[Operator] Disconnected during call');
-        if (deepgramPhone) deepgramPhone.finish();
-        if (deepgramOperator) deepgramOperator.finish();
+        if (sonioxPhone) sonioxPhone.close();
+        if (sonioxOperator) sonioxOperator.close();
         if (phoneWs.readyState === WebSocket.OPEN) phoneWs.close();
-        closeTranslators();
         closeTTS();
     });
 }
