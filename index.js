@@ -167,11 +167,7 @@ function createSonioxConnection(config, onTranslation, onError) {
             }
 
             if (response.tokens && response.tokens.length > 0) {
-                // Debug: показываем первые несколько токенов
-                const debugTokens = response.tokens.slice(0, 3).map(t =>
-                    `"${t.text}" (final:${t.is_final}, status:${t.translation_status || 'none'})`
-                ).join(', ');
-                console.log(`[Soniox ${config.name}] Tokens: ${debugTokens}${response.tokens.length > 3 ? '...' : ''}`);
+
 
                 for (const token of response.tokens) {
                     // Собираем только переведённые финальные токены
@@ -307,7 +303,6 @@ function startTranslationSession(phoneWs, operatorWs) {
 
             if (msg.event === 'start') {
                 streamSid = msg.start.streamSid;
-                console.log(`[Phone] ✓ Stream started: ${streamSid.substring(0, 8)}...`);
 
                 // Инициализируем TTS для абонента
                 initTTSForPhone(phoneWs, streamSid);

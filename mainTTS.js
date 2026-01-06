@@ -2,7 +2,8 @@ require('dotenv').config();
 const WebSocket = require('ws');
 
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
-const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_STANDARD_VOICE_ID;
+const ELEVENLABS_RUSSIAN_VOICE_ID = process.env.ELEVENLABS_STANDARD_VOICE_ID;   // Русский голос для абонента
+const ELEVENLABS_ENGLISH_VOICE_ID = process.env.ELEVENLABS_ENGLISH_VOICE_ID;   // Английский голос для оператора
 
 /**
  * Класс для управления Text-to-Speech через ElevenLabs Realtime API
@@ -18,7 +19,13 @@ class ElevenLabsTTS {
         this.outputFormat = outputFormat;  // 'pcm_16000' или 'ulaw_8000'
         this.direction = direction;  // 'RU→EN' или 'EN→RU'
         this.streamSid = streamSid;  // Для SignalWire (phone)
-        this.voiceId = outputFormat === 'ulaw_8000' ? ELEVENLABS_VOICE_ID : ELEVENLABS_VOICE_ID;
+
+        // Выбираем голос в зависимости от направления:
+        // RU→EN: озвучиваем английский текст → английский голос
+        // EN→RU: озвучиваем русский текст → русский голос
+        this.voiceId = direction === 'RU→EN' ? ELEVENLABS_ENGLISH_VOICE_ID : ELEVENLABS_RUSSIAN_VOICE_ID;
+
+        console.log(`[ElevenLabs TTS ${this.direction}] Using voice: ${this.voiceId?.substring(0, 8)}...`);
     }
 
     /**
@@ -192,11 +199,12 @@ class ElevenLabsTTS {
 }
 
 // Глобальные инстансы TTS
-let ttsForOperator = null;  // Для оператора (RU→EN, PCM16)
-let ttsForPhone = null;     // Для абонента (EN→RU, µ-law)
+let ttsForOperator = null;  // Для оператора (RU→EN, PCM16, английский голос)
+let ttsForPhone = null;     // Для абонента (EN→RU, µ-law, русский голос)
 
 /**
  * Инициализация TTS для оператора (вызывается при старте сессии)
+ * Озвучивает английский текст (перевод речи клиента)
  * @param {WebSocket} operatorWs - WebSocket соединение с оператором
  */
 function initTTSForOperator(operatorWs) {
@@ -208,6 +216,7 @@ function initTTSForOperator(operatorWs) {
 
 /**
  * Инициализация TTS для абонента (вызывается при старте сессии)
+ * Озвучивает русский текст (перевод речи оператора)
  * @param {WebSocket} phoneWs - WebSocket соединение с абонентом
  * @param {string} streamSid - SignalWire stream ID
  */
@@ -219,8 +228,8 @@ function initTTSForPhone(phoneWs, streamSid) {
 }
 
 /**
- * Озвучивает текст для оператора (RU→EN)
- * @param {string} text - Текст для озвучки
+ * Озвучивает текст для оператора (английский текст)
+ * @param {string} text - Текст для озвучки (EN)
  * @returns {Promise<void>}
  */
 async function playTTSForOperator(text) {
@@ -232,8 +241,8 @@ async function playTTSForOperator(text) {
 }
 
 /**
- * Озвучивает текст для абонента (EN→RU)
- * @param {string} text - Текст для озвучки
+ * Озвучивает текст для абонента (русский текст)
+ * @param {string} text - Текст для озвучки (RU)
  * @returns {Promise<void>}
  */
 async function playTTSForPhone(text) {
