@@ -95,6 +95,31 @@ function createSonioxConnection(config, onTranslation, onError) {
     const ws = new WebSocket(SONIOX_WS_URL);
     let translationBuffer = '';
     let isConfigured = false;
+    let flushTimeout = null;
+
+    // Функция для отправки буфера
+    const flushBuffer = () => {
+        if (flushTimeout) {
+            clearTimeout(flushTimeout);
+            flushTimeout = null;
+        }
+        if (translationBuffer.trim().length > 0) {
+            const translation = translationBuffer.trim();
+            translationBuffer = '';
+
+            const timestamp = new Date().toISOString().substring(11, 23);
+            console.log(`[Soniox ${config.name} ${timestamp}] ✓ Translation: ${translation}`);
+
+            onTranslation(translation);
+        }
+    };
+
+    // Сброс таймера буфера
+    const resetFlushTimer = () => {
+        if (flushTimeout) clearTimeout(flushTimeout);
+        // Отправляем буфер через 1.5 секунды тишины
+        flushTimeout = setTimeout(flushBuffer, 1500);
+    };
 
     ws.on('open', () => {
         console.log(`[Soniox ${config.name}] ✓ Connected`);
@@ -132,31 +157,51 @@ function createSonioxConnection(config, onTranslation, onError) {
 
             if (response.finished) {
                 console.log(`[Soniox ${config.name}] Stream finished`);
+                if (flushTimeout) clearTimeout(flushTimeout);
+                // Отправляем оставшийся буфер
+                if (translationBuffer.trim().length > 0) {
+                    onTranslation(translationBuffer.trim());
+                    translationBuffer = '';
+                }
                 return;
             }
 
             if (response.tokens && response.tokens.length > 0) {
-                let hasEndpoint = false;
+                // Debug: показываем первые несколько токенов
+                const debugTokens = response.tokens.slice(0, 3).map(t =>
+                    `"${t.text}" (final:${t.is_final}, status:${t.translation_status || 'none'})`
+                ).join(', ');
+                console.log(`[Soniox ${config.name}] Tokens: ${debugTokens}${response.tokens.length > 3 ? '...' : ''}`);
 
                 for (const token of response.tokens) {
-                    // Собираем только переведённые токены
+                    // Собираем только переведённые финальные токены
                     if (token.translation_status === 'translation' && token.is_final) {
                         translationBuffer += token.text;
                     }
-
-                    // Проверяем endpoint (конец фразы)
-                    if (token.endpoint_id !== undefined) {
-                        hasEndpoint = true;
-                    }
                 }
 
-                // Если есть endpoint или накопилось достаточно текста — отправляем на TTS
-                if (hasEndpoint && translationBuffer.trim().length > 0) {
+                // Сбрасываем таймер при получении токенов
+                if (translationBuffer.length > 0) {
+                    resetFlushTimer();
+                }
+
+                // Проверяем, есть ли конец предложения в буфере
+                const hasSentenceEnd = /[.!?。？！]\s*$/.test(translationBuffer);
+
+                // Или проверяем флаг endpoint в ответе
+                const hasEndpoint = response.endpoint !== undefined;
+
+                // Отправляем если есть конец предложения или endpoint
+                if ((hasSentenceEnd || hasEndpoint) && translationBuffer.trim().length > 0) {
+                    if (flushTimeout) {
+                        clearTimeout(flushTimeout);
+                        flushTimeout = null;
+                    }
                     const translation = translationBuffer.trim();
                     translationBuffer = '';
 
                     const timestamp = new Date().toISOString().substring(11, 23);
-                    console.log(`[Soniox ${config.name} ${timestamp}] Translation: ${translation}`);
+                    console.log(`[Soniox ${config.name} ${timestamp}] ✓ Translation: ${translation}`);
 
                     onTranslation(translation);
                 }
@@ -182,6 +227,8 @@ function createSonioxConnection(config, onTranslation, onError) {
             }
         },
         close: () => {
+            if (flushTimeout) clearTimeout(flushTimeout);
+            flushBuffer(); // Отправляем остаток буфера
             if (ws.readyState === WebSocket.OPEN) {
                 // Отправляем пустой фрейм для graceful close
                 ws.send(Buffer.alloc(0));
