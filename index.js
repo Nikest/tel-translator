@@ -261,7 +261,8 @@ function startTranslationSession(phoneWs, operatorWs) {
             }
 
             // Озвучиваем для оператора
-            await playTTSForOperator(translatedText);
+            // ЗАКОММЕНТИРОВАНО: перевод речи Клиента приходит только текстом (без озвучки)
+            // await playTTSForOperator(translatedText);
         },
         (error) => {
             console.error('[Phone Translation] Error:', error);
