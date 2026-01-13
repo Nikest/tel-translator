@@ -114,17 +114,17 @@ function createSonioxConnection(config, onTranslation, onError) {
         }
     };
 
-    // Сброс таймера буфера
+    // Сброс таймера буфера (уменьшено с 1500мс до 800мс)
     const resetFlushTimer = () => {
         if (flushTimeout) clearTimeout(flushTimeout);
-        // Отправляем буфер через 1.5 секунды тишины
-        flushTimeout = setTimeout(flushBuffer, 1500);
+        // Отправляем буфер через 800мс тишины (было 1500мс)
+        flushTimeout = setTimeout(flushBuffer, 800);
     };
 
     ws.on('open', () => {
         console.log(`[Soniox ${config.name}] ✓ Connected`);
 
-        // Отправляем конфигурацию
+        // Отправляем конфигурацию (оптимизировано для низкой латентности)
         const configMessage = {
             api_key: SONIOX_API_KEY,
             model: 'stt-rt-preview',
@@ -134,6 +134,8 @@ function createSonioxConnection(config, onTranslation, onError) {
             language_hints: [config.sourceLanguage],
             language_hints_strict: true,
             enable_endpoint_detection: true,
+            // Ускоряем финализацию токенов (по умолчанию может быть до 9000мс)
+            max_non_final_tokens_duration_ms: 1000,
             translation: {
                 type: 'one_way',
                 target_language: config.targetLanguage
@@ -142,7 +144,7 @@ function createSonioxConnection(config, onTranslation, onError) {
 
         ws.send(JSON.stringify(configMessage));
         isConfigured = true;
-        console.log(`[Soniox ${config.name}] ✓ Configured: ${config.sourceLanguage} → ${config.targetLanguage}`);
+        console.log(`[Soniox ${config.name}] ✓ Configured: ${config.sourceLanguage} → ${config.targetLanguage} (low-latency mode)`);
     });
 
     ws.on('message', (data) => {
@@ -167,8 +169,6 @@ function createSonioxConnection(config, onTranslation, onError) {
             }
 
             if (response.tokens && response.tokens.length > 0) {
-
-
                 for (const token of response.tokens) {
                     // Собираем только переведённые финальные токены
                     if (token.translation_status === 'translation' && token.is_final) {
@@ -181,14 +181,14 @@ function createSonioxConnection(config, onTranslation, onError) {
                     resetFlushTimer();
                 }
 
+                // Проверяем наличие <end> токена - сигнал endpoint detection
+                const hasEndToken = response.tokens.some(t => t.text === '<end>' && t.is_final);
+
                 // Проверяем, есть ли конец предложения в буфере
                 const hasSentenceEnd = /[.!?。？！]\s*$/.test(translationBuffer);
 
-                // Или проверяем флаг endpoint в ответе
-                const hasEndpoint = response.endpoint !== undefined;
-
                 // Отправляем если есть конец предложения или endpoint
-                if ((hasSentenceEnd || hasEndpoint) && translationBuffer.trim().length > 0) {
+                if ((hasSentenceEnd || hasEndToken) && translationBuffer.trim().length > 0) {
                     if (flushTimeout) {
                         clearTimeout(flushTimeout);
                         flushTimeout = null;
