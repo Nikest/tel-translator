@@ -53,6 +53,16 @@ class ElevenLabsTTS {
             }
         });
 
+        this.ws.on('unexpected-response', (request, response) => {
+            let responseBody = '';
+            response.on('data', (chunk) => {
+                responseBody += chunk;
+            });
+            response.on('end', () => {
+                console.error(`[ElevenLabs TTS ${this.label}] ❌ HTTP ${response.statusCode} Error Details:`, responseBody);
+            });
+        });
+
         this.ws.on('open', () => {
             console.log(`[ElevenLabs TTS ${this.label}] ✓ Connected`);
 
