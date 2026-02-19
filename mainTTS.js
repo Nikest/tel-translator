@@ -45,7 +45,7 @@ class ElevenLabsTTS {
         if (targetWs) this.targetWs = targetWs;
         if (streamSid) this.streamSid = streamSid;
 
-        const wsUrl = `wss://api.elevenlabs.io/v1/text-to-speech/${this.voiceId}/stream-input?model_id=eleven_v3&output_format=${this.outputFormat}&optimize_streaming_latency=3`;
+        const wsUrl = `wss://api.elevenlabs.io/v1/text-to-speech/${this.voiceId}/stream-input?model_id=eleven_multilingual_v3&output_format=${this.outputFormat}&optimize_streaming_latency=3`;
 
         this.ws = new WebSocket(wsUrl, {
             headers: {
@@ -53,7 +53,7 @@ class ElevenLabsTTS {
             }
         });
 
-        this.ws.on('unexpected-response', (request, response) => {
+        /*this.ws.on('unexpected-response', (request, response) => {
             let responseBody = '';
             response.on('data', (chunk) => {
                 responseBody += chunk;
@@ -61,7 +61,7 @@ class ElevenLabsTTS {
             response.on('end', () => {
                 console.error(`[ElevenLabs TTS ${this.label}] ❌ HTTP ${response.statusCode} Error Details:`, responseBody);
             });
-        });
+        });*/
 
         this.ws.on('open', () => {
             console.log(`[ElevenLabs TTS ${this.label}] ✓ Connected`);
