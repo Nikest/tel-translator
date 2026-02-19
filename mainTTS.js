@@ -62,12 +62,12 @@ class ElevenLabsTTS {
                 voice_settings: {
                     stability: 0.5,
                     similarity_boost: 0.75,
-                    style: 0.0,
+                    style: 0.35,
                     use_speaker_boost: true,
                     speed: 0.975, // Увеличено на 30% (0.75 * 1.30 = 0.975)
                 },
                 generation_config: {
-                    chunk_length_schedule: [120, 160, 250, 290]
+                    chunk_length_schedule: [50]
                 }
             };
 
@@ -219,16 +219,24 @@ class ElevenLabsTTS {
         }
 
         try {
+            // Для коротких фраз добавляем завершающую точку если нет пунктуации —
+            // это помогает ElevenLabs корректно сгенерировать конец фразы
+            let ttsText = text.trim();
+            if (ttsText.length < 30 && !/[.!?。？！,;:…]$/.test(ttsText)) {
+                ttsText = ttsText + '.';
+            }
+
             // Отправляем текст для озвучки
             const message = {
-                text: text + ' ',
+                text: ttsText + ' ',
                 try_trigger_generation: true
             };
 
             this.ws.send(JSON.stringify(message));
-            console.log(`[ElevenLabs TTS ${this.label}] → Generating audio for: "${text.substring(0, 50)}..."`);
+            console.log(`[ElevenLabs TTS ${this.label}] → Generating audio for: "${text.substring(0, 50)}..." (${ttsText.length} chars)`);
 
-            // Отправляем пустое сообщение для завершения и flush генерации
+            // Flush генерации — для коротких фраз даём чуть больше времени
+            const flushDelay = ttsText.length < 30 ? 200 : 100;
             setTimeout(() => {
                 if (this.ws && this.ws.readyState === WebSocket.OPEN) {
                     const flushMessage = {
@@ -238,7 +246,7 @@ class ElevenLabsTTS {
                     this.ws.send(JSON.stringify(flushMessage));
                     console.log(`[ElevenLabs TTS ${this.label}] → Flushing audio generation`);
                 }
-            }, 100);
+            }, flushDelay);
 
         } catch (error) {
             console.error(`[ElevenLabs TTS ${this.label}] ❌ Error sending text:`, error.message);

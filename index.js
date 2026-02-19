@@ -157,11 +157,11 @@ function createSonioxConnection(config, onTranslation, onError) {
         }
     };
 
-    // Сброс таймера буфера (уменьшено с 1500мс до 800мс)
+    // Сброс таймера буфера
     const resetFlushTimer = () => {
         if (flushTimeout) clearTimeout(flushTimeout);
-        // Отправляем буфер через 800мс тишины (было 1500мс)
-        flushTimeout = setTimeout(flushBuffer, 800);
+        // Отправляем буфер через 600мс тишины (снижено для быстрой реакции на короткие фразы)
+        flushTimeout = setTimeout(flushBuffer, 600);
     };
 
     ws.on('open', () => {
