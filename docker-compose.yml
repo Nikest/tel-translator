@@ -1,5 +1,8 @@
 version: '3.8'
 
+networks:
+  translator-net:
+
 services:
   translator-bot:
     build: .
@@ -11,3 +14,21 @@ services:
     restart: unless-stopped
     environment:
       - NODE_ENV=production
+      - CORS_ALLOWED_ORIGINS=http://localhost:4000
+    networks:
+      - translator-net
+
+  translator-app:
+    build:
+      context: ../tel-translator-app
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:3000
+        NEXT_PUBLIC_WS_URL: ws://localhost:3000
+    container_name: translator-app
+    ports:
+      - "4000:3000"
+    restart: unless-stopped
+    depends_on:
+      - translator-bot
+    networks:
+      - translator-net

@@ -22,8 +22,30 @@ const OPERATOR_LANGUAGES = [
 
 let waitingOperator = null;
 
+// --- CORS Helper ---
+const CORS_ALLOWED_ORIGINS = process.env.CORS_ALLOWED_ORIGINS
+    ? process.env.CORS_ALLOWED_ORIGINS.split(',')
+    : ['http://localhost:3001', 'http://localhost:4000'];
+
+function setCORSHeaders(res, req) {
+    const origin = req.headers.origin;
+    if (CORS_ALLOWED_ORIGINS.includes('*') || CORS_ALLOWED_ORIGINS.includes(origin)) {
+        res.setHeader('Access-Control-Allow-Origin', origin || '*');
+    }
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+}
+
 // --- HTTP Server ---
 const server = http.createServer((req, res) => {
+    // Handle CORS preflight
+    if (req.method === 'OPTIONS') {
+        setCORSHeaders(res, req);
+        res.writeHead(204);
+        res.end();
+        return;
+    }
+
     if (req.method === 'GET' && (req.url === '/' || req.url === '/index.html')) {
         const filePath = path.join(__dirname, 'index.html');
         fs.readFile(filePath, (err, content) => {
@@ -36,6 +58,7 @@ const server = http.createServer((req, res) => {
             }
         });
     } else if (req.method === 'GET' && req.url === '/api/settings') {
+        setCORSHeaders(res, req);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ operatorLanguages: OPERATOR_LANGUAGES }));
     } else {
