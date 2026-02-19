@@ -137,6 +137,8 @@ function createSonioxConnection(config, onTranslation, onError) {
     let translationBuffer = '';
     let isConfigured = false;
     let flushTimeout = null;
+    let isSpeaking = false;
+    let speakingTimeout = null;
 
     // Функция для отправки буфера
     const flushBuffer = () => {
@@ -227,6 +229,35 @@ function createSonioxConnection(config, onTranslation, onError) {
             }
 
             if (response.tokens && response.tokens.length > 0) {
+                // --- Speaking detection ---
+                const hasOriginalTokens = response.tokens.some(
+                    t => t.translation_status === 'original' && t.text !== '<end>'
+                );
+                const hasEndToken = response.tokens.some(t => t.text === '<end>' && t.is_final);
+
+                if (hasOriginalTokens && !isSpeaking) {
+                    isSpeaking = true;
+                    if (config.onSpeakingChange) config.onSpeakingChange(true);
+                }
+
+                // Reset silence timer on any speech tokens
+                if (hasOriginalTokens) {
+                    if (speakingTimeout) clearTimeout(speakingTimeout);
+                    speakingTimeout = setTimeout(() => {
+                        if (isSpeaking) {
+                            isSpeaking = false;
+                            if (config.onSpeakingChange) config.onSpeakingChange(false);
+                        }
+                    }, 1200);
+                }
+
+                // Endpoint = speaker definitely stopped
+                if (hasEndToken && isSpeaking) {
+                    if (speakingTimeout) { clearTimeout(speakingTimeout); speakingTimeout = null; }
+                    isSpeaking = false;
+                    if (config.onSpeakingChange) config.onSpeakingChange(false);
+                }
+
                 for (const token of response.tokens) {
                     // Собираем только переведённые финальные токены
                     if (token.translation_status === 'translation' && token.is_final) {
@@ -245,9 +276,6 @@ function createSonioxConnection(config, onTranslation, onError) {
                 if (translationBuffer.length > 0) {
                     resetFlushTimer();
                 }
-
-                // Проверяем наличие <end> токена - сигнал endpoint detection
-                const hasEndToken = response.tokens.some(t => t.text === '<end>' && t.is_final);
 
                 // Проверяем, есть ли конец предложения в буфере
                 const hasSentenceEnd = /[.!?。？！]\s*$/.test(translationBuffer);
@@ -296,6 +324,7 @@ function createSonioxConnection(config, onTranslation, onError) {
         close: () => {
             closing = true;
             if (flushTimeout) clearTimeout(flushTimeout);
+            if (speakingTimeout) clearTimeout(speakingTimeout);
             flushBuffer(); // Отправляем остаток буфера
             if (ws.readyState === WebSocket.OPEN) {
                 // Отправляем пустой фрейм для graceful close
@@ -327,6 +356,15 @@ function startTranslationSession(phoneWs, operatorWs) {
             autoDetect: true,
             targetLanguage: operatorLang,
             notifyWs: operatorWs,
+            onSpeakingChange: (speaking) => {
+                if (operatorWs.readyState === WebSocket.OPEN) {
+                    operatorWs.send(JSON.stringify({
+                        type: 'speaking',
+                        speaker: 'client',
+                        status: speaking ? 'started' : 'stopped'
+                    }));
+                }
+            },
             onLanguageDetected: (lang) => {
                 if (lang && lang !== detectedCallerLanguage) {
                     detectedCallerLanguage = lang;
@@ -383,7 +421,16 @@ function startTranslationSession(phoneWs, operatorWs) {
                 sampleRate: 24000,
                 sourceLanguage: operatorLang,
                 targetLanguage: callerLang,
-                notifyWs: operatorWs
+                notifyWs: operatorWs,
+                onSpeakingChange: (speaking) => {
+                    if (operatorWs.readyState === WebSocket.OPEN) {
+                        operatorWs.send(JSON.stringify({
+                            type: 'speaking',
+                            speaker: 'operator',
+                            status: speaking ? 'started' : 'stopped'
+                        }));
+                    }
+                }
             },
             async (translatedText) => {
                 // Отправляем перевод оператору (что будет сказано абоненту)
