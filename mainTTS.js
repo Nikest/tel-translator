@@ -24,6 +24,7 @@ class ElevenLabsTTS {
         this.pendingMsgId = null;
         this.audioChunksSent = 0;
         this.onDelivered = null;
+        this.deliveryTimeout = null;  // Timer for delivery confirmation
 
         console.log(`[ElevenLabs TTS ${this.label}] Using voice: ${this.voiceId?.substring(0, 8)}...`);
     }
@@ -105,9 +106,23 @@ class ElevenLabsTTS {
                                 payload: audioBase64
                             }));
                         }
+
+                        // Reset delivery timeout — confirm delivery 800ms after last audio chunk
+                        if (this.pendingMsgId) {
+                            if (this.deliveryTimeout) clearTimeout(this.deliveryTimeout);
+                            this.deliveryTimeout = setTimeout(() => {
+                                if (this.pendingMsgId && this.onDelivered) {
+                                    const delivered = this.audioChunksSent > 0;
+                                    console.log(`[ElevenLabs TTS ${this.label}] ✓ Audio delivery confirmed (${this.audioChunksSent} chunks)`);
+                                    this.onDelivered(this.pendingMsgId, delivered);
+                                    this.pendingMsgId = null;
+                                }
+                            }, 800);
+                        }
                     } else {
                         console.error(`[ElevenLabs TTS ${this.label}] ❌ Target WS not ready`);
                         // Audio lost — notify failure
+                        if (this.deliveryTimeout) { clearTimeout(this.deliveryTimeout); this.deliveryTimeout = null; }
                         if (this.pendingMsgId && this.onDelivered) {
                             this.onDelivered(this.pendingMsgId, false);
                             this.pendingMsgId = null;
@@ -115,8 +130,9 @@ class ElevenLabsTTS {
                     }
                 }
 
-                // ElevenLabs отправляет isFinal когда генерация завершена
+                // ElevenLabs sends isFinal when the connection is closing (backup check)
                 if (response.isFinal) {
+                    if (this.deliveryTimeout) { clearTimeout(this.deliveryTimeout); this.deliveryTimeout = null; }
                     const delivered = this.audioChunksSent > 0;
                     console.log(`[ElevenLabs TTS ${this.label}] ✓ Audio generation completed (${this.audioChunksSent} chunks, ${delivered ? 'delivered' : 'failed'})`);
                     if (this.pendingMsgId && this.onDelivered) {
@@ -164,6 +180,9 @@ class ElevenLabsTTS {
         if (!text || text.trim().length === 0) {
             return;
         }
+
+        // Clear any pending delivery from previous message
+        if (this.deliveryTimeout) { clearTimeout(this.deliveryTimeout); this.deliveryTimeout = null; }
 
         this.pendingMsgId = msgId;
         this.audioChunksSent = 0;
@@ -230,6 +249,8 @@ class ElevenLabsTTS {
      * Закрывает соединение
      */
     close() {
+        if (this.deliveryTimeout) { clearTimeout(this.deliveryTimeout); this.deliveryTimeout = null; }
+
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             // Отправляем финальное сообщение для завершения генерации
             try {
