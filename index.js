@@ -160,8 +160,8 @@ function createSonioxConnection(config, onTranslation, onError) {
     // Сброс таймера буфера
     const resetFlushTimer = () => {
         if (flushTimeout) clearTimeout(flushTimeout);
-        // Отправляем буфер через 600мс тишины (снижено для быстрой реакции на короткие фразы)
-        flushTimeout = setTimeout(flushBuffer, 600);
+        // Отправляем буфер через 400мс тишины
+        flushTimeout = setTimeout(flushBuffer, 400);
     };
 
     ws.on('open', () => {
@@ -175,8 +175,8 @@ function createSonioxConnection(config, onTranslation, onError) {
             sample_rate: config.sampleRate,
             num_channels: 1,
             enable_endpoint_detection: true,
-            // Ускоряем финализацию токенов (по умолчанию может быть до 9000мс)
-            max_non_final_tokens_duration_ms: 1000,
+            // Ускоряем финализацию токенов (по умолчанию до 9000мс)
+            max_non_final_tokens_duration_ms: 600,
             translation: {
                 type: 'one_way',
                 target_language: config.targetLanguage
@@ -280,8 +280,13 @@ function createSonioxConnection(config, onTranslation, onError) {
                 // Проверяем, есть ли конец предложения в буфере
                 const hasSentenceEnd = /[.!?。？！]\s*$/.test(translationBuffer);
 
-                // Отправляем если есть конец предложения или endpoint
-                if ((hasSentenceEnd || hasEndToken) && translationBuffer.trim().length > 0) {
+                // Для длинных фраз: отправляем по запятой/двоеточию/точке с запятой
+                // чтобы начать озвучку раньше, не дожидаясь конца всего предложения
+                const hasClauseBreak = translationBuffer.trim().length > 40
+                    && /[,;:—]\s*$/.test(translationBuffer);
+
+                // Отправляем если есть конец предложения, clause break или endpoint
+                if ((hasSentenceEnd || hasClauseBreak || hasEndToken) && translationBuffer.trim().length > 0) {
                     if (flushTimeout) {
                         clearTimeout(flushTimeout);
                         flushTimeout = null;

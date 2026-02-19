@@ -62,9 +62,9 @@ class ElevenLabsTTS {
                 voice_settings: {
                     stability: 0.5,
                     similarity_boost: 0.75,
-                    style: 0.35,
+                    style: 0.25,
                     use_speaker_boost: true,
-                    speed: 0.975, // Увеличено на 30% (0.75 * 1.30 = 0.975)
+                    speed: 0.975,
                 },
                 generation_config: {
                     chunk_length_schedule: [50]
