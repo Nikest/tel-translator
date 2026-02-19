@@ -4,11 +4,21 @@ const http = require('http');
 const url = require('url');
 const fs = require('fs');
 const path = require('path');
-const { initTTSForOperator, initTTSForPhone, playTTSForOperator, playTTSForPhone, closeTTS } = require('./mainTTS');
+const { initTTSForPhone, playTTSForPhone, closeTTS } = require('./mainTTS');
 
 const PORT = process.env.PORT || 8080;
 const SONIOX_API_KEY = process.env.SONIOX_API_KEY;
 const SONIOX_WS_URL = 'wss://stt-rt.soniox.com/transcribe-websocket';
+
+// Доступные языки для оператора
+const OPERATOR_LANGUAGES = [
+    { code: 'ru', name: 'Russian', flag: '\u{1F1F7}\u{1F1FA}' },
+    { code: 'de', name: 'German', flag: '\u{1F1E9}\u{1F1EA}' },
+    { code: 'fr', name: 'French', flag: '\u{1F1EB}\u{1F1F7}' },
+    { code: 'it', name: 'Italian', flag: '\u{1F1EE}\u{1F1F9}' },
+    { code: 'es', name: 'Spanish', flag: '\u{1F1EA}\u{1F1F8}' },
+    { code: 'ro', name: 'Romanian', flag: '\u{1F1F7}\u{1F1F4}' }
+];
 
 let waitingOperator = null;
 
@@ -25,6 +35,9 @@ const server = http.createServer((req, res) => {
                 res.end(content);
             }
         });
+    } else if (req.method === 'GET' && req.url === '/api/settings') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ operatorLanguages: OPERATOR_LANGUAGES }));
     } else {
         res.writeHead(200);
         res.end('Translator Bridge Running');
@@ -35,7 +48,8 @@ const server = http.createServer((req, res) => {
 const wss = new WebSocket.Server({ noServer: true });
 
 server.on('upgrade', (request, socket, head) => {
-    const pathname = url.parse(request.url).pathname;
+    const parsed = url.parse(request.url, true);
+    const pathname = parsed.pathname;
 
     if (pathname === '/call') {
         wss.handleUpgrade(request, socket, head, (ws) => {
@@ -45,6 +59,7 @@ server.on('upgrade', (request, socket, head) => {
     } else if (pathname === '/operator') {
         wss.handleUpgrade(request, socket, head, (ws) => {
             ws.clientType = 'operator';
+            ws.operatorLanguage = parsed.query.lang || 'en';
             wss.emit('connection', ws, request);
         });
     } else {
@@ -55,7 +70,7 @@ server.on('upgrade', (request, socket, head) => {
 wss.on('connection', (ws) => {
     // --- Оператор подключился ---
     if (ws.clientType === 'operator') {
-        console.log('[Operator] ✓ Connected via browser');
+        console.log(`[Operator] ✓ Connected via browser (language: ${ws.operatorLanguage})`);
         waitingOperator = ws;
 
         ws.send(JSON.stringify({ type: 'status', msg: 'Waiting for a call...' }));
@@ -124,15 +139,13 @@ function createSonioxConnection(config, onTranslation, onError) {
     ws.on('open', () => {
         console.log(`[Soniox ${config.name}] ✓ Connected`);
 
-        // Отправляем конфигурацию (оптимизировано для низкой латентности)
+        // Базовая конфигурация (оптимизировано для низкой латентности)
         const configMessage = {
             api_key: SONIOX_API_KEY,
             model: 'stt-rt-preview',
             audio_format: config.audioFormat,
             sample_rate: config.sampleRate,
             num_channels: 1,
-            language_hints: [config.sourceLanguage],
-            language_hints_strict: true,
             enable_endpoint_detection: true,
             // Ускоряем финализацию токенов (по умолчанию может быть до 9000мс)
             max_non_final_tokens_duration_ms: 1000,
@@ -142,9 +155,19 @@ function createSonioxConnection(config, onTranslation, onError) {
             }
         };
 
+        // Авто-определение языка или фиксированный язык
+        if (config.autoDetect) {
+            configMessage.enable_language_identification = true;
+        } else {
+            configMessage.language_hints = [config.sourceLanguage];
+            configMessage.language_hints_strict = true;
+        }
+
         ws.send(JSON.stringify(configMessage));
         isConfigured = true;
-        console.log(`[Soniox ${config.name}] ✓ Configured: ${config.sourceLanguage} → ${config.targetLanguage} (low-latency mode)`);
+
+        const sourceDesc = config.autoDetect ? 'auto-detect' : config.sourceLanguage;
+        console.log(`[Soniox ${config.name}] ✓ Configured: ${sourceDesc} → ${config.targetLanguage} (low-latency mode)`);
     });
 
     ws.on('message', (data) => {
@@ -173,6 +196,13 @@ function createSonioxConnection(config, onTranslation, onError) {
                     // Собираем только переведённые финальные токены
                     if (token.translation_status === 'translation' && token.is_final) {
                         translationBuffer += token.text;
+                    }
+
+                    // Отслеживаем определённый язык абонента (из original-токенов)
+                    if (config.autoDetect && token.is_final && token.translation_status === 'original' && token.language) {
+                        if (config.onLanguageDetected) {
+                            config.onLanguageDetected(token.language);
+                        }
                     }
                 }
 
@@ -240,14 +270,38 @@ function startTranslationSession(phoneWs, operatorWs) {
     let sonioxPhone = null;
     let sonioxOperator = null;
 
-    // --- Soniox для Phone (RU → EN) ---
+    const operatorLang = operatorWs.operatorLanguage || 'en';
+    // Язык абонента определяется автоматически через Soniox
+    let detectedCallerLanguage = null;
+
+    console.log(`[Session] Operator language: ${operatorLang}, Caller language: auto-detect`);
+
+    // --- Soniox для Phone (auto-detect → operator language) ---
     sonioxPhone = createSonioxConnection(
         {
-            name: 'Phone RU→EN',
+            name: `Phone ?→${operatorLang.toUpperCase()}`,
             audioFormat: 'mulaw',
             sampleRate: 8000,
-            sourceLanguage: 'ru',
-            targetLanguage: 'en'
+            autoDetect: true,
+            targetLanguage: operatorLang,
+            onLanguageDetected: (lang) => {
+                if (lang && lang !== detectedCallerLanguage) {
+                    detectedCallerLanguage = lang;
+                    console.log(`[Session] Caller language detected: ${lang}`);
+
+                    // Уведомляем оператора об определённом языке
+                    if (operatorWs.readyState === WebSocket.OPEN) {
+                        operatorWs.send(JSON.stringify({
+                            type: 'caller_language',
+                            language: lang
+                        }));
+                    }
+
+                    // Пересоздаём Soniox для оператора с нужным целевым языком,
+                    // если он ещё не настроен на этот язык
+                    recreateOperatorSoniox(lang);
+                }
+            }
         },
         async (translatedText) => {
             // Отправляем перевод оператору (текст)
@@ -256,46 +310,58 @@ function startTranslationSession(phoneWs, operatorWs) {
                     type: 'transcript',
                     speaker: 'client',
                     text: translatedText,
-                    language: 'en'
+                    language: operatorLang
                 }));
             }
-
-            // Озвучиваем для оператора
-            // ЗАКОММЕНТИРОВАНО: перевод речи Клиента приходит только текстом (без озвучки)
-            // await playTTSForOperator(translatedText);
         },
         (error) => {
             console.error('[Phone Translation] Error:', error);
         }
     );
 
-    // --- Soniox для Operator (EN → RU) ---
-    sonioxOperator = createSonioxConnection(
-        {
-            name: 'Operator EN→RU',
-            audioFormat: 'pcm_s16le',
-            sampleRate: 24000,
-            sourceLanguage: 'en',
-            targetLanguage: 'ru'
-        },
-        async (translatedText) => {
-            // Отправляем перевод оператору (что будет сказано абоненту)
-            if (operatorWs.readyState === WebSocket.OPEN) {
-                operatorWs.send(JSON.stringify({
-                    type: 'transcript',
-                    speaker: 'operator_translated',
-                    text: translatedText,
-                    language: 'ru'
-                }));
-            }
+    // Функция создания/пересоздания Soniox для оператора
+    let operatorSonioxTargetLang = null;
 
-            // Озвучиваем для абонента
-            await playTTSForPhone(translatedText);
-        },
-        (error) => {
-            console.error('[Operator Translation] Error:', error);
+    function recreateOperatorSoniox(callerLang) {
+        // Не пересоздаём если целевой язык тот же
+        if (operatorSonioxTargetLang === callerLang) return;
+        // Если язык абонента совпадает с языком оператора — перевод не нужен,
+        // но мы всё равно создаём для транскрипции
+        operatorSonioxTargetLang = callerLang;
+
+        // Закрываем предыдущее соединение
+        if (sonioxOperator) {
+            sonioxOperator.close();
+            console.log(`[Soniox Operator] Reconnecting: ${operatorLang} → ${callerLang}`);
         }
-    );
+
+        sonioxOperator = createSonioxConnection(
+            {
+                name: `Operator ${operatorLang.toUpperCase()}→${callerLang.toUpperCase()}`,
+                audioFormat: 'pcm_s16le',
+                sampleRate: 24000,
+                sourceLanguage: operatorLang,
+                targetLanguage: callerLang
+            },
+            async (translatedText) => {
+                // Отправляем перевод оператору (что будет сказано абоненту)
+                if (operatorWs.readyState === WebSocket.OPEN) {
+                    operatorWs.send(JSON.stringify({
+                        type: 'transcript',
+                        speaker: 'operator_translated',
+                        text: translatedText,
+                        language: callerLang
+                    }));
+                }
+
+                // Озвучиваем для абонента на его языке
+                await playTTSForPhone(translatedText);
+            },
+            (error) => {
+                console.error('[Operator Translation] Error:', error);
+            }
+        );
+    }
 
     // --- Обработка сообщений от Phone (SignalWire) ---
     phoneWs.on('message', (message) => {
@@ -305,7 +371,7 @@ function startTranslationSession(phoneWs, operatorWs) {
             if (msg.event === 'start') {
                 streamSid = msg.start.streamSid;
 
-                // Инициализируем TTS для абонента
+                // Инициализируем TTS для абонента (без фиксированного языка — он определится позже)
                 initTTSForPhone(phoneWs, streamSid);
             }
 
@@ -328,9 +394,6 @@ function startTranslationSession(phoneWs, operatorWs) {
             // Игнорируем ошибки парсинга
         }
     });
-
-    // Инициализируем TTS для оператора
-    initTTSForOperator(operatorWs);
 
     // --- Обработка сообщений от Operator ---
     operatorWs.on('message', (message) => {

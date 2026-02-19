@@ -115,7 +115,7 @@
             text-align: right;
         }
 
-        /* Client bubbles - left side (translated to EN for operator) */
+        /* Client bubbles - left side (translated to operator's language) */
         .chat-message.client .chat-bubble {
             background: linear-gradient(135deg, #1e3a5f 0%, #1e293b 100%);
             border: 1px solid rgba(96, 165, 250, 0.25);
@@ -124,7 +124,7 @@
             text-align: left !important;
         }
 
-        /* Operator bubbles - right side (translated to RU for client) */
+        /* Operator bubbles - right side (translated to caller's language) */
         .chat-message.operator .chat-bubble {
             background: linear-gradient(135deg, #7c3aed 0%, #4c1d95 100%);
             border: 1px solid rgba(167, 139, 250, 0.3);
@@ -269,19 +269,99 @@
         .mute-button.muted:hover {
             background: rgba(239, 68, 68, 0.25);
         }
+
+        .language-selector {
+            margin: 16px 0;
+            text-align: left;
+        }
+
+        .setting-label {
+            display: block;
+            font-size: 0.8rem;
+            color: #9ca3af;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            text-align: center;
+        }
+
+        .language-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+        }
+
+        .lang-option {
+            padding: 10px 8px;
+            background: rgba(30, 41, 59, 0.6);
+            border: 2px solid rgba(148, 163, 184, 0.15);
+            border-radius: 12px;
+            color: #e5e7eb;
+            font-size: 0.85rem;
+            cursor: pointer;
+            text-align: center;
+            transition: all 0.2s;
+        }
+
+        .lang-option:hover {
+            border-color: rgba(148, 163, 184, 0.4);
+            background: rgba(30, 41, 59, 0.9);
+        }
+
+        .lang-option.selected {
+            border-color: #22c55e;
+            background: rgba(34, 197, 94, 0.15);
+        }
+
+        .lang-option .lang-flag {
+            font-size: 1.4rem;
+            display: block;
+            margin-bottom: 4px;
+        }
+
+        .lang-option .lang-name {
+            font-size: 0.75rem;
+            color: #9ca3af;
+        }
+
+        .lang-option.selected .lang-name {
+            color: #22c55e;
+        }
+
+        .caller-lang-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            background: rgba(96, 165, 250, 0.15);
+            border: 1px solid rgba(96, 165, 250, 0.3);
+            border-radius: 8px;
+            font-size: 0.75rem;
+            color: #93c5fd;
+            margin-bottom: 8px;
+        }
     </style>
 </head>
 <body>
 
 <div id="connectContainer" class="call-card">
     <div class="call-status">System Offline</div>
-    <div class="call-sub">Connect to operator network</div>
+    <div class="call-sub">Select your language and connect</div>
+
+    <div class="language-selector" id="languageSelector">
+        <label class="setting-label">Your Language</label>
+        <div id="languageGrid" class="language-grid"></div>
+    </div>
+
     <button id="btnConnect" class="call-button answer"><span>Connect to Server</span></button>
 </div>
 
 <div id="operatorContainer" class="call-card hidden">
     <div id="statusText" class="call-status">Waiting...</div>
     <div id="callerNumber" class="call-number">---</div>
+    <div id="callerLangBadge" class="caller-lang-badge hidden">
+        <span id="callerLangText">Detecting language...</span>
+    </div>
     <div id="callerSub" class="call-sub">Waiting for incoming call</div>
 
     <div id="callTimer" class="call-timer hidden">00:00</div>
@@ -318,7 +398,6 @@
 
 <script>
     const PROTOCOL = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const WS_URL = `${PROTOCOL}//${window.location.host}/operator`;
     const SAMPLE_RATE = 24000;
 
     let ws;
@@ -333,6 +412,8 @@
     let audioDestination = null;
     let callSeconds = 0;
     let callTimerInterval = null;
+    let selectedLanguage = null;
+    let operatorLanguages = [];
 
     // UI Elements
     const connectContainer = document.getElementById('connectContainer');
@@ -340,6 +421,8 @@
     const statusText = document.getElementById('statusText');
     const callerNumber = document.getElementById('callerNumber');
     const callerSub = document.getElementById('callerSub');
+    const callerLangBadge = document.getElementById('callerLangBadge');
+    const callerLangText = document.getElementById('callerLangText');
     const callTimer = document.getElementById('callTimer');
     const btnConnect = document.getElementById('btnConnect');
     const btnWaiting = document.getElementById('btnWaiting');
@@ -351,8 +434,46 @@
     const muteIcon = document.getElementById('muteIcon');
     const muteText = document.getElementById('muteText');
     const audioSettings = document.getElementById('audioSettings');
+    const languageGrid = document.getElementById('languageGrid');
 
-    btnConnect.addEventListener('click', initWebSocket);
+    // Загружаем настройки с сервера
+    async function loadSettings() {
+        try {
+            const resp = await fetch('/api/settings');
+            const data = await resp.json();
+            operatorLanguages = data.operatorLanguages || [];
+            renderLanguageSelector();
+        } catch (err) {
+            console.error('Failed to load settings:', err);
+        }
+    }
+
+    function renderLanguageSelector() {
+        languageGrid.innerHTML = '';
+        operatorLanguages.forEach((lang, idx) => {
+            const el = document.createElement('div');
+            el.className = 'lang-option' + (idx === 0 ? ' selected' : '');
+            el.dataset.code = lang.code;
+            el.innerHTML = `<span class="lang-flag">${lang.flag}</span><span class="lang-name">${lang.name}</span>`;
+            el.addEventListener('click', () => {
+                document.querySelectorAll('.lang-option').forEach(o => o.classList.remove('selected'));
+                el.classList.add('selected');
+                selectedLanguage = lang.code;
+            });
+            languageGrid.appendChild(el);
+            if (idx === 0) selectedLanguage = lang.code;
+        });
+    }
+
+    loadSettings();
+
+    btnConnect.addEventListener('click', () => {
+        if (!selectedLanguage) {
+            alert('Please select your language');
+            return;
+        }
+        initWebSocket();
+    });
 
     // Enumerate and populate audio devices
     async function loadAudioDevices() {
@@ -424,6 +545,7 @@
     });
 
     function initWebSocket() {
+        const WS_URL = `${PROTOCOL}//${window.location.host}/operator?lang=${selectedLanguage}`;
         ws = new WebSocket(WS_URL);
 
         ws.onopen = async () => {
@@ -455,6 +577,10 @@
 
             if (data.type === 'transcript') {
                 addTranscript(data.speaker, data.text, data.language);
+            }
+
+            if (data.type === 'caller_language') {
+                updateCallerLanguage(data.language);
             }
         };
 
@@ -491,6 +617,7 @@
             muteText.textContent = 'Mute';
         }
 
+        callerLangBadge.classList.add('hidden');
         document.getElementById('transcriptContainer').classList.add('hidden');
         document.getElementById('transcriptScroll').innerHTML = '';
         document.getElementById('speakingIndicator').classList.add('hidden');
@@ -503,12 +630,39 @@
         audioContext = null;
     }
 
+    // Карта кодов языков → названия
+    const LANG_NAMES = {
+        ru: 'Russian', en: 'English', de: 'German', fr: 'French',
+        it: 'Italian', es: 'Spanish', ro: 'Romanian', pt: 'Portuguese',
+        zh: 'Chinese', ja: 'Japanese', ko: 'Korean', ar: 'Arabic',
+        hi: 'Hindi', tr: 'Turkish', pl: 'Polish', nl: 'Dutch',
+        sv: 'Swedish', da: 'Danish', no: 'Norwegian', fi: 'Finnish',
+        cs: 'Czech', uk: 'Ukrainian', bg: 'Bulgarian', hr: 'Croatian',
+        el: 'Greek', hu: 'Hungarian', sk: 'Slovak', sl: 'Slovenian',
+        sr: 'Serbian', bs: 'Bosnian', mk: 'Macedonian', sq: 'Albanian',
+        ka: 'Georgian', az: 'Azerbaijani', kk: 'Kazakh', he: 'Hebrew',
+        th: 'Thai', vi: 'Vietnamese', ms: 'Malay', id: 'Indonesian',
+        tl: 'Tagalog', sw: 'Swahili', af: 'Afrikaans', ca: 'Catalan',
+        gl: 'Galician', eu: 'Basque', cy: 'Welsh', et: 'Estonian',
+        lv: 'Latvian', lt: 'Lithuanian', be: 'Belarusian', fa: 'Persian',
+        bn: 'Bengali', gu: 'Gujarati', kn: 'Kannada', ml: 'Malayalam',
+        mr: 'Marathi', pa: 'Punjabi', ta: 'Tamil', te: 'Telugu', ur: 'Urdu'
+    };
+
     function handleIncomingCall() {
         statusText.innerText = "Incoming Call";
-        callerNumber.innerText = "Абонент";
-        callerSub.innerText = "Russian Speaker";
+        callerNumber.innerText = "Caller";
+        callerSub.innerText = "Language: detecting...";
+        callerLangBadge.classList.add('hidden');
         btnWaiting.classList.add('hidden');
         btnAnswer.classList.remove('hidden');
+    }
+
+    function updateCallerLanguage(langCode) {
+        const langName = LANG_NAMES[langCode] || langCode.toUpperCase();
+        callerSub.innerText = `${langName} Speaker`;
+        callerLangBadge.classList.remove('hidden');
+        callerLangText.innerText = `Caller speaks: ${langName}`;
     }
 
     function handleSpeakingIndicator(speaker, status) {
@@ -537,8 +691,8 @@
         const time = getTimeString();
 
         // Determine message type based on speaker
-        // 'client' = translated speech from phone (RU→EN)
-        // 'operator_translated' = translated speech from operator (EN→RU)
+        // 'client' = translated speech from phone (caller's lang → operator's lang)
+        // 'operator_translated' = translated speech from operator (operator's lang → caller's lang)
 
         let side, label, lang;
 
