@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  translator-bot:
+    build: .
+    container_name: translator-bot
+    ports:
+      - "3000:8080"
+    env_file:
+      - .env
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
