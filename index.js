@@ -5,6 +5,7 @@ const url = require('url');
 const fs = require('fs');
 const path = require('path');
 const { initTTSForPhone, playTTSForPhone, closeTTS } = require('./mainTTS');
+const { logError } = require('./errorLogger');
 
 const PORT = process.env.PORT || 8080;
 const SONIOX_API_KEY = process.env.SONIOX_API_KEY;
@@ -204,7 +205,12 @@ function createSonioxConnection(config, onTranslation, onError) {
             if (response.error_code) {
                 // Suppress timeout errors during graceful close
                 if (closing && response.error_code === 408) return;
+                const errMsg = `Soniox ${config.name}: ${response.error_message}`;
                 console.error(`[Soniox ${config.name}] ❌ Error ${response.error_code}: ${response.error_message}`);
+                logError(errMsg);
+                if (config.notifyWs && config.notifyWs.readyState === WebSocket.OPEN) {
+                    config.notifyWs.send(JSON.stringify({ type: 'error', msg: 'Translation bot error' }));
+                }
                 onError(response.error_message);
                 return;
             }
@@ -268,7 +274,12 @@ function createSonioxConnection(config, onTranslation, onError) {
 
     ws.on('error', (error) => {
         if (closing) return; // Suppress errors during graceful close
+        const errMsg = `Soniox ${config.name}: ${error.message}`;
         console.error(`[Soniox ${config.name}] ❌ WebSocket error:`, error.message);
+        logError(errMsg);
+        if (config.notifyWs && config.notifyWs.readyState === WebSocket.OPEN) {
+            config.notifyWs.send(JSON.stringify({ type: 'error', msg: 'Translation bot error' }));
+        }
         onError(error.message);
     });
 
@@ -315,6 +326,7 @@ function startTranslationSession(phoneWs, operatorWs) {
             sampleRate: 8000,
             autoDetect: true,
             targetLanguage: operatorLang,
+            notifyWs: operatorWs,
             onLanguageDetected: (lang) => {
                 if (lang && lang !== detectedCallerLanguage) {
                     detectedCallerLanguage = lang;
@@ -370,7 +382,8 @@ function startTranslationSession(phoneWs, operatorWs) {
                 audioFormat: 'pcm_s16le',
                 sampleRate: 24000,
                 sourceLanguage: operatorLang,
-                targetLanguage: callerLang
+                targetLanguage: callerLang,
+                notifyWs: operatorWs
             },
             async (translatedText) => {
                 // Отправляем перевод оператору (что будет сказано абоненту)
@@ -399,7 +412,7 @@ function startTranslationSession(phoneWs, operatorWs) {
                 streamSid = msg.start.streamSid;
 
                 // Инициализируем TTS для абонента (без фиксированного языка — он определится позже)
-                initTTSForPhone(phoneWs, streamSid);
+                initTTSForPhone(phoneWs, streamSid, operatorWs);
             }
 
             if (msg.event === 'media' && sonioxPhone) {

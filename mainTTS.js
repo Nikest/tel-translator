@@ -1,5 +1,6 @@
 require('dotenv').config();
 const WebSocket = require('ws');
+const { logError } = require('./errorLogger');
 
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
 const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_STANDARD_VOICE_ID;   // Мультиязычный голос (eleven_turbo_v2_5)
@@ -8,11 +9,12 @@ const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_STANDARD_VOICE_ID;   // Му�
  * Класс для управления Text-to-Speech через ElevenLabs Realtime API
  */
 class ElevenLabsTTS {
-    constructor(outputFormat = 'pcm_16000', targetWs = null, label = 'Phone', streamSid = null) {
+    constructor(outputFormat = 'pcm_16000', targetWs = null, label = 'Phone', streamSid = null, notifyWs = null) {
         this.ws = null;
         this.isReady = false;
         this.audioQueue = [];
         this.targetWs = targetWs;  // WebSocket для отправки аудио (phone)
+        this.notifyWs = notifyWs;  // WebSocket оператора для уведомлений об ошибках
         this.reconnectAttempts = 0;
         this.maxReconnectAttempts = 3;
         this.outputFormat = outputFormat;  // 'ulaw_8000'
@@ -21,6 +23,13 @@ class ElevenLabsTTS {
         this.voiceId = ELEVENLABS_VOICE_ID;
 
         console.log(`[ElevenLabs TTS ${this.label}] Using voice: ${this.voiceId?.substring(0, 8)}...`);
+    }
+
+    notifyError(errorName) {
+        logError(`ElevenLabs TTS ${this.label}: ${errorName}`);
+        if (this.notifyWs && this.notifyWs.readyState === WebSocket.OPEN) {
+            this.notifyWs.send(JSON.stringify({ type: 'error', msg: 'Translation bot error' }));
+        }
     }
 
     /**
@@ -107,6 +116,7 @@ class ElevenLabsTTS {
                 // Обработка ошибок
                 if (response.error) {
                     console.error(`[ElevenLabs TTS ${this.label}] ❌ Error:`, response.error);
+                    this.notifyError(response.error);
                 }
 
             } catch (e) {
@@ -117,6 +127,7 @@ class ElevenLabsTTS {
 
         this.ws.on('error', (error) => {
             console.error(`[ElevenLabs TTS ${this.label}] ❌ WS Error:`, error.message);
+            this.notifyError(error.message);
         });
 
         this.ws.on('close', () => {
@@ -220,9 +231,9 @@ let ttsForPhone = null;     // Для абонента (µ-law, мультияз
  * @param {WebSocket} phoneWs - WebSocket соединение с абонентом
  * @param {string} streamSid - SignalWire stream ID
  */
-function initTTSForPhone(phoneWs, streamSid) {
+function initTTSForPhone(phoneWs, streamSid, notifyWs) {
     if (!ttsForPhone) {
-        ttsForPhone = new ElevenLabsTTS('ulaw_8000', phoneWs, 'Phone', streamSid);
+        ttsForPhone = new ElevenLabsTTS('ulaw_8000', phoneWs, 'Phone', streamSid, notifyWs);
         ttsForPhone.connect();
     }
 }
