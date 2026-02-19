@@ -12,11 +12,13 @@ const SONIOX_WS_URL = 'wss://stt-rt.soniox.com/transcribe-websocket';
 
 // Доступные языки для оператора
 const OPERATOR_LANGUAGES = [
+    { code: 'en', name: 'English', flag: '\u{1F1EC}\u{1F1E7}' },
     { code: 'ru', name: 'Russian', flag: '\u{1F1F7}\u{1F1FA}' },
     { code: 'de', name: 'German', flag: '\u{1F1E9}\u{1F1EA}' },
     { code: 'fr', name: 'French', flag: '\u{1F1EB}\u{1F1F7}' },
     { code: 'it', name: 'Italian', flag: '\u{1F1EE}\u{1F1F9}' },
     { code: 'es', name: 'Spanish', flag: '\u{1F1EA}\u{1F1F8}' },
+    { code: 'pl', name: 'Polish', flag: '\u{1F1F5}\u{1F1F1}' },
     { code: 'ro', name: 'Romanian', flag: '\u{1F1F7}\u{1F1F4}' }
 ];
 
