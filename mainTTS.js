@@ -127,7 +127,7 @@ class ElevenLabsTTS {
             if (this.reconnectAttempts < this.maxReconnectAttempts && this.targetWs) {
                 this.reconnectAttempts++;
                 console.log(`[ElevenLabs TTS ${this.label}] Reconnecting (${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
-                setTimeout(() => this.connect(this.targetWs, this.streamSid), 2000);
+                setTimeout(() => this.connect(this.targetWs, this.streamSid), 500);
             }
         });
     }
@@ -140,6 +140,24 @@ class ElevenLabsTTS {
     async playTTS(text) {
         if (!text || text.trim().length === 0) {
             return;
+        }
+
+        // If reconnecting, wait up to 5 seconds for connection
+        if (!this.isReady && this.reconnectAttempts > 0) {
+            console.log(`[ElevenLabs TTS ${this.label}] ⏳ Waiting for reconnect...`);
+            const waitReady = await new Promise((resolve) => {
+                const start = Date.now();
+                const check = () => {
+                    if (this.isReady) return resolve(true);
+                    if (Date.now() - start > 5000) return resolve(false);
+                    setTimeout(check, 200);
+                };
+                check();
+            });
+            if (!waitReady) {
+                console.error(`[ElevenLabs TTS ${this.label}] ❌ Reconnect timeout, dropping text`);
+                return;
+            }
         }
 
         if (!this.isReady || !this.ws || this.ws.readyState !== WebSocket.OPEN) {

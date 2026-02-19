@@ -195,11 +195,15 @@ function createSonioxConnection(config, onTranslation, onError) {
         console.log(`[Soniox ${config.name}] ✓ Configured: ${sourceDesc} → ${config.targetLanguage} (low-latency mode)`);
     });
 
+    let closing = false;
+
     ws.on('message', (data) => {
         try {
             const response = JSON.parse(data.toString());
 
             if (response.error_code) {
+                // Suppress timeout errors during graceful close
+                if (closing && response.error_code === 408) return;
                 console.error(`[Soniox ${config.name}] ❌ Error ${response.error_code}: ${response.error_message}`);
                 onError(response.error_message);
                 return;
@@ -263,12 +267,13 @@ function createSonioxConnection(config, onTranslation, onError) {
     });
 
     ws.on('error', (error) => {
+        if (closing) return; // Suppress errors during graceful close
         console.error(`[Soniox ${config.name}] ❌ WebSocket error:`, error.message);
         onError(error.message);
     });
 
     ws.on('close', () => {
-        console.log(`[Soniox ${config.name}] Connection closed`);
+        if (!closing) console.log(`[Soniox ${config.name}] Connection closed`);
     });
 
     return {
@@ -278,6 +283,7 @@ function createSonioxConnection(config, onTranslation, onError) {
             }
         },
         close: () => {
+            closing = true;
             if (flushTimeout) clearTimeout(flushTimeout);
             flushBuffer(); // Отправляем остаток буфера
             if (ws.readyState === WebSocket.OPEN) {
@@ -339,9 +345,7 @@ function startTranslationSession(phoneWs, operatorWs) {
                 }));
             }
         },
-        (error) => {
-            console.error('[Phone Translation] Error:', error);
-        }
+        () => {} // Errors logged inside Soniox connection
     );
 
     // Функция создания/пересоздания Soniox для оператора
@@ -382,9 +386,7 @@ function startTranslationSession(phoneWs, operatorWs) {
                 // Озвучиваем для абонента на его языке
                 await playTTSForPhone(translatedText);
             },
-            (error) => {
-                console.error('[Operator Translation] Error:', error);
-            }
+            () => {} // Errors logged inside Soniox connection
         );
     }
 
@@ -449,15 +451,8 @@ function startTranslationSession(phoneWs, operatorWs) {
         if (phoneWs.readyState === WebSocket.OPEN) phoneWs.close();
 
         // Закрываем Soniox соединения
-        if (sonioxPhone) {
-            sonioxPhone.close();
-            console.log('[Soniox Phone] ✓ Connection closed');
-        }
-
-        if (sonioxOperator) {
-            sonioxOperator.close();
-            console.log('[Soniox Operator] ✓ Connection closed');
-        }
+        if (sonioxPhone) sonioxPhone.close();
+        if (sonioxOperator) sonioxOperator.close();
 
         // Закрываем TTS
         closeTTS();
