@@ -8,6 +8,7 @@ COPY index.js ./
 COPY index.html ./
 COPY translationModule.js ./
 COPY mainTTS.js ./
+COPY errorLogger.js ./
 
 EXPOSE 8080
 CMD ["node", "index.js"]
