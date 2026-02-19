@@ -4,7 +4,7 @@ const http = require('http');
 const url = require('url');
 const fs = require('fs');
 const path = require('path');
-const { initTTSForPhone, playTTSForPhone, closeTTS } = require('./mainTTS');
+const { initTTSForPhone, playTTSForPhone, setTTSDeliveryCallback, closeTTS } = require('./mainTTS');
 const { logError } = require('./errorLogger');
 
 const PORT = process.env.PORT || 8080;
@@ -344,6 +344,7 @@ function startTranslationSession(phoneWs, operatorWs) {
     const operatorLang = operatorWs.operatorLanguage || 'en';
     // Язык абонента определяется автоматически через Soniox
     let detectedCallerLanguage = null;
+    let msgIdCounter = 0;
 
     console.log(`[Session] Operator language: ${operatorLang}, Caller language: auto-detect`);
 
@@ -433,18 +434,33 @@ function startTranslationSession(phoneWs, operatorWs) {
                 }
             },
             async (translatedText) => {
-                // Отправляем перевод оператору (что будет сказано абоненту)
+                const msgId = ++msgIdCounter;
+
+                // Отправляем перевод оператору со статусом "sending"
                 if (operatorWs.readyState === WebSocket.OPEN) {
                     operatorWs.send(JSON.stringify({
                         type: 'transcript',
                         speaker: 'operator_translated',
                         text: translatedText,
-                        language: callerLang
+                        language: callerLang,
+                        msgId,
+                        status: 'sending'
                     }));
                 }
 
+                // Setup delivery callback
+                setTTSDeliveryCallback((deliveredMsgId, success) => {
+                    if (operatorWs.readyState === WebSocket.OPEN) {
+                        operatorWs.send(JSON.stringify({
+                            type: 'delivery_status',
+                            msgId: deliveredMsgId,
+                            status: success ? 'delivered' : 'failed'
+                        }));
+                    }
+                });
+
                 // Озвучиваем для абонента на его языке
-                await playTTSForPhone(translatedText);
+                await playTTSForPhone(translatedText, msgId);
             },
             () => {} // Errors logged inside Soniox connection
         );

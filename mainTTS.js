@@ -21,6 +21,9 @@ class ElevenLabsTTS {
         this.label = label;
         this.streamSid = streamSid;  // Для SignalWire (phone)
         this.voiceId = ELEVENLABS_VOICE_ID;
+        this.pendingMsgId = null;
+        this.audioChunksSent = 0;
+        this.onDelivered = null;
 
         console.log(`[ElevenLabs TTS ${this.label}] Using voice: ${this.voiceId?.substring(0, 8)}...`);
     }
@@ -94,23 +97,32 @@ class ElevenLabsTTS {
                                 streamSid: this.streamSid,
                                 media: { payload: audioBase64 }
                             }));
-                            console.log(`[ElevenLabs TTS ${this.label}] → Sent audio chunk to phone`);
+                            this.audioChunksSent++;
                         } else {
                             // Для operator: обычный формат
                             this.targetWs.send(JSON.stringify({
                                 type: 'audio',
                                 payload: audioBase64
                             }));
-                            console.log(`[ElevenLabs TTS ${this.label}] → Sent audio chunk to operator`);
                         }
                     } else {
                         console.error(`[ElevenLabs TTS ${this.label}] ❌ Target WS not ready`);
+                        // Audio lost — notify failure
+                        if (this.pendingMsgId && this.onDelivered) {
+                            this.onDelivered(this.pendingMsgId, false);
+                            this.pendingMsgId = null;
+                        }
                     }
                 }
 
                 // ElevenLabs отправляет isFinal когда генерация завершена
                 if (response.isFinal) {
-                    console.log(`[ElevenLabs TTS ${this.label}] ✓ Audio generation completed`);
+                    const delivered = this.audioChunksSent > 0;
+                    console.log(`[ElevenLabs TTS ${this.label}] ✓ Audio generation completed (${this.audioChunksSent} chunks, ${delivered ? 'delivered' : 'failed'})`);
+                    if (this.pendingMsgId && this.onDelivered) {
+                        this.onDelivered(this.pendingMsgId, delivered);
+                        this.pendingMsgId = null;
+                    }
                 }
 
                 // Обработка ошибок
@@ -148,10 +160,13 @@ class ElevenLabsTTS {
      * @param {string} text - Текст для озвучки
      * @returns {Promise<void>}
      */
-    async playTTS(text) {
+    async playTTS(text, msgId = null) {
         if (!text || text.trim().length === 0) {
             return;
         }
+
+        this.pendingMsgId = msgId;
+        this.audioChunksSent = 0;
 
         // If reconnecting, wait up to 5 seconds for connection
         if (!this.isReady && this.reconnectAttempts > 0) {
@@ -167,12 +182,20 @@ class ElevenLabsTTS {
             });
             if (!waitReady) {
                 console.error(`[ElevenLabs TTS ${this.label}] ❌ Reconnect timeout, dropping text`);
+                if (this.pendingMsgId && this.onDelivered) {
+                    this.onDelivered(this.pendingMsgId, false);
+                    this.pendingMsgId = null;
+                }
                 return;
             }
         }
 
         if (!this.isReady || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
             console.error(`[ElevenLabs TTS ${this.label}] ❌ WebSocket not ready`);
+            if (this.pendingMsgId && this.onDelivered) {
+                this.onDelivered(this.pendingMsgId, false);
+                this.pendingMsgId = null;
+            }
             return;
         }
 
@@ -243,12 +266,18 @@ function initTTSForPhone(phoneWs, streamSid, notifyWs) {
  * @param {string} text - Текст для озвучки
  * @returns {Promise<void>}
  */
-async function playTTSForPhone(text) {
+async function playTTSForPhone(text, msgId = null) {
     if (!ttsForPhone) {
         console.error('[ElevenLabs TTS Phone] ❌ TTS not initialized');
         return;
     }
-    await ttsForPhone.playTTS(text);
+    await ttsForPhone.playTTS(text, msgId);
+}
+
+function setTTSDeliveryCallback(callback) {
+    if (ttsForPhone) {
+        ttsForPhone.onDelivered = callback;
+    }
 }
 
 /**
@@ -264,5 +293,6 @@ function closeTTS() {
 module.exports = {
     initTTSForPhone,
     playTTSForPhone,
+    setTTSDeliveryCallback,
     closeTTS
 };
