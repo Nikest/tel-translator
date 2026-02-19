@@ -45,7 +45,7 @@ class ElevenLabsTTS {
         if (targetWs) this.targetWs = targetWs;
         if (streamSid) this.streamSid = streamSid;
 
-        const wsUrl = `wss://api.elevenlabs.io/v1/text-to-speech/${this.voiceId}/stream-input?model_id=eleven_multilingual_v3&output_format=${this.outputFormat}&optimize_streaming_latency=3`;
+        const wsUrl = `wss://api.elevenlabs.io/v1/text-to-speech/${this.voiceId}/stream-input?model_id=eleven_turbo_v2_5&output_format=${this.outputFormat}`;
 
         this.ws = new WebSocket(wsUrl, {
             headers: {
@@ -72,7 +72,7 @@ class ElevenLabsTTS {
                 voice_settings: {
                     stability: 0.5,
                     similarity_boost: 0.75,
-                    style: 0.25,
+                    style: 0.15,
                     use_speaker_boost: true,
                     speed: 0.975,
                 },
