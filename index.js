@@ -392,6 +392,7 @@ function startTranslationSession(phoneWs, operatorWs) {
         },
         async (translatedText) => {
             // Отправляем перевод оператору (текст)
+            console.log(`[Phone→Operator] Sending client transcript: "${translatedText.substring(0, 60)}" (wsState: ${operatorWs.readyState})`);
             if (operatorWs.readyState === WebSocket.OPEN) {
                 operatorWs.send(JSON.stringify({
                     type: 'transcript',
@@ -399,6 +400,8 @@ function startTranslationSession(phoneWs, operatorWs) {
                     text: translatedText,
                     language: operatorLang
                 }));
+            } else {
+                console.error(`[Phone→Operator] ❌ Operator WS not open (state: ${operatorWs.readyState}), transcript lost`);
             }
         },
         () => {} // Errors logged inside Soniox connection
