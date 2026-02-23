@@ -326,11 +326,16 @@ function createSonioxConnection(config, onTranslation, onError) {
                 ws.send(audioBuffer);
             }
         },
-        close: () => {
+        close: (discard = false) => {
             closing = true;
             if (flushTimeout) clearTimeout(flushTimeout);
             if (speakingTimeout) clearTimeout(speakingTimeout);
-            flushBuffer(); // Отправляем остаток буфера
+            if (discard) {
+                // Выбрасываем буфер (при смене языка — старый перевод не нужен)
+                translationBuffer = '';
+            } else {
+                flushBuffer(); // Отправляем остаток буфера
+            }
             if (ws.readyState === WebSocket.OPEN) {
                 // Отправляем пустой фрейм для graceful close
                 ws.send(Buffer.alloc(0));
@@ -417,9 +422,9 @@ function startTranslationSession(phoneWs, operatorWs) {
         // но мы всё равно создаём для транскрипции
         operatorSonioxTargetLang = callerLang;
 
-        // Закрываем предыдущее соединение
+        // Закрываем предыдущее соединение (discard=true — старый перевод на другой язык не нужен)
         if (sonioxOperator) {
-            sonioxOperator.close();
+            sonioxOperator.close(true);
             console.log(`[Soniox Operator] Reconnecting: ${operatorLang} → ${callerLang}`);
         }
 
@@ -529,7 +534,10 @@ function startTranslationSession(phoneWs, operatorWs) {
     // =====================
     // Закрытие сессии
     // =====================
+    let sessionClosed = false;
     const closeAll = () => {
+        if (sessionClosed) return;
+        sessionClosed = true;
         console.log('[System] Closing all connections...');
 
         if (phoneWs.readyState === WebSocket.OPEN) phoneWs.close();
